@@ -1,1 +1,20 @@
-html[data-active-skin=\"design-ab\"][data-theme=\"light\"] { --skin-theme-id: light; }
+html[data-active-skin="design-ab"][data-theme="light"] {
+  --skin-theme-id: light;
+  --main-bg: #f3f6ff;
+  --sidebar-bg: #e7eefc;
+  --chat-bg: #fbfdff;
+  --card-bg: #ffffff;
+  --bg-secondary: #eef3fd;
+  --bg-tertiary: #e5ecfa;
+  --text-primary: #1f2f42;
+  --text-secondary: #4a617d;
+  --text-muted: #778aa3;
+  --text-color: #1f2f42;
+  --border-color: #c7d4ea;
+  --hover-bg: #dde7f8;
+  --active-bg: #d2def2;
+  --primary-color: #35b89d;
+  --user-msg-bg: #35b89d;
+  --user-msg-text: #ffffff;
+  --input-bg: #ffffff;
+}

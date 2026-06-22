@@ -36,13 +36,15 @@ class ExternalChannelBridge {
     dispatcher,
     chainController = null,
     windowManager = null,
-    aiService = null
+    aiService = null,
+    chatContextService = null
   }) {
     this.db = db;
     this.dispatcher = dispatcher;
     this.chainController = chainController;
     this.windowManager = windowManager;
     this.aiService = aiService;
+    this.chatContextService = chatContextService;
   }
 
   async _getRuntimeForResponse(response) {
@@ -155,11 +157,13 @@ class ExternalChannelBridge {
       throw new Error('sessionId is required');
     }
 
-    await this.db.addConversation({
+    const entry = {
       role: String(role || 'system'),
       content: String(content || ''),
       metadata: this._buildMessageMetadata(channelMeta, hidden === true, metadata)
-    }, normalizedSessionId);
+    };
+    await this.db.addConversation(entry, normalizedSessionId);
+    if (this.chatContextService?.append) this.chatContextService.append(normalizedSessionId, entry);
 
     this._notifyConversationUpdate(normalizedSessionId);
     return { success: true, sessionId: normalizedSessionId };
@@ -186,21 +190,28 @@ class ExternalChannelBridge {
     }
 
     const hidden = duplicate !== true;
-    const conversations = await this.db.getConversations(50, resolvedSessionId);
-    const history = conversations.map((conversation) => ({
-      role: conversation.role,
-      content: conversation.role === 'assistant'
-        ? stripReasoningBlocks(stripToolPatterns(conversation.content))
-        : conversation.content
-    })).filter((entry) => entry.content && entry.content.trim().length > 0);
+    const history = this.chatContextService?.buildPromptHistory
+      ? await this.chatContextService.buildPromptHistory(resolvedSessionId, messageText)
+      : (typeof this.db.loadChatSession === 'function'
+        ? await this.db.loadChatSession(resolvedSessionId, { includeHidden: true })
+        : await this.db.getConversations(Number.MAX_SAFE_INTEGER, resolvedSessionId))
+        .map((conversation) => ({
+          role: conversation.role,
+          content: conversation.role === 'assistant'
+            ? stripReasoningBlocks(stripToolPatterns(conversation.content))
+            : conversation.content
+        }))
+        .filter((entry) => entry.content && entry.content.trim().length > 0);
 
-    await this.db.addConversation({
+    const userEntry = {
       role: 'user',
       content: messageText,
       metadata: this._buildMessageMetadata(channelMeta, hidden, {
         source: 'external_inbound'
       })
-    }, resolvedSessionId);
+    };
+    await this.db.addConversation(userEntry, resolvedSessionId);
+    if (this.chatContextService?.append) this.chatContextService.append(resolvedSessionId, userEntry);
     this._notifyConversationUpdate(resolvedSessionId);
 
     const sessionRow = this.db.get('SELECT agent_id FROM chat_sessions WHERE id = ?', [resolvedSessionId]);
@@ -229,13 +240,18 @@ class ExternalChannelBridge {
 
     const runtimeConfig = await this._getRuntimeForResponse(response);
     const assistantText = stripToolPatterns(buildAssistantContent(response, runtimeConfig));
-    await this.db.addConversation({
+    const assistantEntry = {
       role: 'assistant',
       content: assistantText,
       metadata: this._buildMessageMetadata(channelMeta, hidden, {
         source: 'external_outbound'
       })
-    }, resolvedSessionId);
+    };
+    await this.db.addConversation(assistantEntry, resolvedSessionId);
+    if (this.chatContextService?.append) this.chatContextService.append(resolvedSessionId, assistantEntry);
+    if (this.chatContextService?.saveProviderContextUsage) {
+      await this.chatContextService.saveProviderContextUsage(resolvedSessionId, response);
+    }
     this._notifyConversationUpdate(resolvedSessionId);
 
     const selection = await getEffectiveLlmSelection(this.db);
@@ -274,6 +290,10 @@ class ExternalChannelBridge {
       throw new Error('Unable to resolve session for clear');
     }
     await this.db.clearChatSession(resolved);
+    if (this.chatContextService?.invalidate) this.chatContextService.invalidate(resolved);
+    if (this.chatContextService?.clearProviderContextUsage) {
+      await this.chatContextService.clearProviderContextUsage(resolved);
+    }
     this._notifyConversationUpdate(resolved);
     return { success: true, sessionId: resolved };
   }

@@ -1,26 +1,37 @@
 /* Design D - Solar Theme (Sepia) */
 
+html[data-active-skin="design-d"][data-theme="solar"],
 html[data-skin-contract-token="design-d"][data-skin-theme-token="solar"] {
-    --skin-main-bg: #fdf6e3;
-    --skin-sidebar-bg: #eee8d5;
-    --skin-input-bg: #e5dfcc;
-    --skin-hover-bg: rgba(0, 0, 0, 0.05);
-    --skin-btn-bg: #d5cfbc;
-    
-    --skin-border-light: rgba(0, 0, 0, 0.04);
-    
-    --skin-text-main: #657b83;
-    --skin-text-muted: #93a1a1;
-    --skin-text-dim: #586e75;
-    
-    --skin-accent: #b58900;
-    --skin-accent-text: #ffffff;
-    
-    --skin-shadow-float: 0 4px 20px rgba(0, 0, 0, 0.05);
+  --skin-theme-id: solar;
 
-    /* General application variable overrides */
-    --bg-base: var(--skin-main-bg);
-    --bg-panel: var(--skin-sidebar-bg);
-    --text-main: var(--skin-text-main);
-    --text-muted: var(--skin-text-muted);
+  --main-bg: #fdf6e3;
+  --sidebar-bg: #eee8d5;
+  --chat-bg: #fbf4e1;
+  --card-bg: #f4edd9;
+  --bg-secondary: #efe6cf;
+  --bg-tertiary: #e7dcc1;
+  --text-primary: #657b83;
+  --text-secondary: #93a1a1;
+  --text-muted: #a9b4b4;
+  --text-color: #657b83;
+  --border-color: transparent;
+  --hover-bg: rgba(0, 0, 0, 0.05);
+  --active-bg: rgba(0, 0, 0, 0.09);
+  --primary-color: #b58900;
+  --user-msg-bg: #b58900;
+  --user-msg-text: #ffffff;
+  --input-bg: #e5dfcc;
+
+  --skin-main-bg: var(--main-bg);
+  --skin-sidebar-bg: var(--sidebar-bg);
+  --skin-input-bg: var(--input-bg);
+  --skin-hover-bg: var(--hover-bg);
+  --skin-btn-bg: #d5cfbc;
+  --skin-border-light: transparent;
+  --skin-text-main: var(--text-primary);
+  --skin-text-muted: var(--text-secondary);
+  --skin-text-dim: var(--text-muted);
+  --skin-accent: var(--primary-color);
+  --skin-accent-text: var(--user-msg-text);
+  --skin-shadow-float: 0 4px 20px rgba(0, 0, 0, 0.05);
 }

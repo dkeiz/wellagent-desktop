@@ -1,22 +1,58 @@
+const path = require('path');
 const { resolvePathTokens, tokenizePath } = require('../path-tokens');
 
 function getPathTokenOptions(server) {
-  const context = server.getCurrentAgentContext?.()
+  const baseContext = server.getCurrentAgentContext?.()
     || server.getCurrentExecutionContext?.()
     || {};
+  const sessionId = baseContext.sessionId ?? server.getCurrentSessionId?.() ?? null;
+  const context = sessionId ? { ...baseContext, sessionId } : baseContext;
   return {
     agentManager: server._agentManager || null,
     sessionWorkspace: server._sessionWorkspace || null,
+    executionDirectory: server._executionDirectory || null,
+    sessionId,
     context
   };
 }
 
 async function resolveToolPath(server, rawPath) {
-  return resolvePathTokens(rawPath, getPathTokenOptions(server));
+  const resolvedPath = await resolvePathTokens(rawPath, getPathTokenOptions(server));
+  if (/\{[a-z_]+\}/i.test(resolvedPath)) {
+    throw new Error(`Unresolved path token in path: ${rawPath}`);
+  }
+  return resolvedPath;
 }
 
 async function toPortablePath(server, absolutePath) {
   return tokenizePath(absolutePath, getPathTokenOptions(server));
+}
+
+async function getAllowedWorkspaceRoot(server) {
+  if (!server._sessionWorkspace?.getWorkspacePath) {
+    return null;
+  }
+  const sessionId = server.getCurrentSessionId?.() || 'default';
+  return server._sessionWorkspace.getWorkspacePath(sessionId);
+}
+
+function getAllowedAgentinRoot(server) {
+  if (server._agentManager?.basePath) {
+    return path.dirname(server._agentManager.basePath);
+  }
+  if (server._sessionWorkspace?.basePath) {
+    return path.dirname(server._sessionWorkspace.basePath);
+  }
+  return null;
+}
+
+async function assertMediaPathAllowed(server, filePath) {
+  await server.assertExecutionPathAllowed?.(filePath, {
+    extraRoots: [
+      await getAllowedWorkspaceRoot(server),
+      getAllowedAgentinRoot(server)
+    ].filter(Boolean)
+  });
 }
 
 function registerMediaTools(server) {
@@ -35,6 +71,7 @@ function registerMediaTools(server) {
   }, async (params) => {
     const fs = require('fs').promises;
     const filePath = await resolveToolPath(server, params.path);
+    await assertMediaPathAllowed(server, filePath);
     const stat = await fs.stat(filePath);
     return { path: await toPortablePath(server, filePath), size: stat.size, modified: stat.mtime };
   });
@@ -54,8 +91,8 @@ function registerMediaTools(server) {
   }, async (params) => {
     const { shell } = require('electron');
     const fs = require('fs');
-    const path = require('path');
     const filePath = await resolveToolPath(server, params.path);
+    await assertMediaPathAllowed(server, filePath);
 
     if (!fs.existsSync(filePath)) {
       return { success: false, error: `File not found: ${params.path}` };
@@ -93,6 +130,7 @@ function registerMediaTools(server) {
     const { shell } = require('electron');
     const fs = require('fs');
     const filePath = await resolveToolPath(server, params.path);
+    await assertMediaPathAllowed(server, filePath);
 
     if (!fs.existsSync(filePath)) {
       return { success: false, error: `Audio file not found: ${params.path}` };
@@ -120,6 +158,7 @@ function registerMediaTools(server) {
     const { shell } = require('electron');
     const fs = require('fs');
     const filePath = await resolveToolPath(server, params.path);
+    await assertMediaPathAllowed(server, filePath);
 
     if (!fs.existsSync(filePath)) {
       return { success: false, error: `Image file not found: ${params.path}` };
@@ -147,10 +186,20 @@ function registerMediaTools(server) {
     const { desktopCapturer } = require('electron');
     const fs = require('fs');
     const savePath = await resolveToolPath(server, params.savePath);
+    await assertMediaPathAllowed(server, savePath);
     const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1920, height: 1080 } });
     if (sources.length > 0) {
       const image = sources[0].thumbnail.toPNG();
       fs.writeFileSync(savePath, image);
+      if (server._artifactRegistry) {
+        const sessionId = server.getCurrentSessionId?.() || 'default';
+        server._artifactRegistry.registerFile(sessionId, {
+          name: path.basename(savePath),
+          path: savePath,
+          source: 'screenshot',
+          category: 'media'
+        });
+      }
       return { success: true, savedTo: await toPortablePath(server, savePath) };
     }
     return { success: false, error: 'No screen found' };

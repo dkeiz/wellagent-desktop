@@ -1,10 +1,3 @@
-/**
- * WorkflowEditor - Visual Node-based Workflow Editor
- * 
- * Provides a canvas-based interface for creating and editing workflows
- * using draggable, connectable tool nodes.
- */
-
 class WorkflowEditor {
     constructor() {
         this.nodes = new Map();
@@ -19,32 +12,28 @@ class WorkflowEditor {
         this.tools = [];
         this.providers = [];
         this.currentWorkflowId = null;
-
         this.canvas = null;
+        this.canvasContainer = null;
         this.connectionsLayer = null;
         this.nodePalette = null;
-
+        this.connectingPointer = null;
+        this.connectMoved = false;
         this.init();
     }
-
     async init() {
         this.canvas = document.getElementById('workflow-canvas');
+        this.canvasContainer = document.getElementById('workflow-canvas-container');
         this.connectionsLayer = document.getElementById('workflow-connections');
         this.nodePalette = document.getElementById('node-palette');
-
         if (!this.canvas) return;
-
         await this.loadTools();
         this.setupEventListeners();
         this.renderNodePalette();
         await this.loadSavedWorkflows();
-
-        // Listen for workflow updates from backend (copy, create, delete via IPC or LLM)
-        window.electronAPI?.on?.('workflow-update', () => {
+        window.electronAPI?.onWorkflowUpdate?.(() => {
             this.loadSavedWorkflows();
         });
     }
-
     async loadTools() {
         try {
             this.tools = await window.electronAPI.getMCPTools?.() || [];
@@ -54,40 +43,26 @@ class WorkflowEditor {
             console.error('Failed to load tools:', error);
         }
     }
-
     setupEventListeners() {
-        // Add Node button toggle
         document.getElementById('add-node-btn')?.addEventListener('click', (e) => {
             e.stopPropagation();
             this.nodePalette?.classList.toggle('visible');
         });
-
-        // Close palette on outside click
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.add-node-dropdown')) {
                 this.nodePalette?.classList.remove('visible');
             }
         });
-
-        // New workflow
         document.getElementById('new-workflow-btn')?.addEventListener('click', () => this.newWorkflow());
-
-        // Save workflow
         document.getElementById('save-workflow-btn')?.addEventListener('click', () => this.saveWorkflow());
-
-        // Run workflow
         document.getElementById('run-workflow-btn')?.addEventListener('click', () => this.runWorkflow());
-
-        // Zoom controls
         document.getElementById('zoom-in-btn')?.addEventListener('click', () => this.setZoom(this.zoom + 0.1));
         document.getElementById('zoom-out-btn')?.addEventListener('click', () => this.setZoom(this.zoom - 0.1));
-
-        // Saved workflows panel controls
         document.getElementById('collapse-workflows-btn')?.addEventListener('click', () => {
             const panel = document.getElementById('saved-workflows-panel');
             const btn = document.getElementById('collapse-workflows-btn');
-            panel?.classList.toggle('collapsed');
-            if (btn) btn.textContent = panel?.classList.contains('collapsed') ? '▼' : '▲';
+            const isCollapsed = Boolean(panel?.classList.toggle('collapsed'));
+            btn?.setAttribute('aria-expanded', String(!isCollapsed));
         });
         document.getElementById('compact-workflows-btn')?.addEventListener('click', () => {
             const panel = document.getElementById('saved-workflows-panel');
@@ -95,33 +70,32 @@ class WorkflowEditor {
             panel?.classList.toggle('compact');
             if (btn) btn.textContent = panel?.classList.contains('compact') ? '▦' : '▤';
         });
-
-        // Canvas events for dragging and connecting
         this.canvas?.addEventListener('mousedown', (e) => this.onCanvasMouseDown(e));
-        this.canvas?.addEventListener('mousemove', (e) => this.onCanvasMouseMove(e));
-        this.canvas?.addEventListener('mouseup', (e) => this.onCanvasMouseUp(e));
-        this.canvas?.addEventListener('mouseleave', (e) => this.onCanvasMouseUp(e));
+        document.addEventListener('mousemove', (e) => this.onCanvasMouseMove(e));
+        document.addEventListener('mouseup', (e) => this.onCanvasMouseUp(e));
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape' || !this.connectingFrom) return;
+            this.connectingFrom = null;
+            this.connectingPointer = null;
+            this.connectMoved = false;
+            this.canvasContainer?.classList.remove('workflow-interacting');
+            this.renderConnections();
+        });
     }
-
     renderNodePalette() {
         if (!this.nodePalette) return;
-
-        // Group tools by their tool group
         const groupedTools = new Map();
         const toolToGroup = new Map();
-
         this.toolGroups.forEach(group => {
             groupedTools.set(group.id, { ...group, tools: [] });
             group.tools.forEach(toolName => toolToGroup.set(toolName, group.id));
         });
-
         this.tools.forEach(tool => {
             const groupId = toolToGroup.get(tool.name);
             if (groupId && groupedTools.has(groupId)) {
                 groupedTools.get(groupId).tools.push(tool);
             }
         });
-
         let html = `
             <div class="palette-group">
                 <div class="palette-group-header">Agentic</div>
@@ -147,10 +121,7 @@ class WorkflowEditor {
                 </div>
             `;
         }
-
         this.nodePalette.innerHTML = html;
-
-        // Add click handlers to palette items
         this.nodePalette.querySelectorAll('.palette-item').forEach(item => {
             item.addEventListener('click', () => {
                 const nodeType = item.dataset.nodeType;
@@ -164,15 +135,11 @@ class WorkflowEditor {
             });
         });
     }
-
     addNode(toolName, x = null, y = null, presetParams = null) {
         const tool = this.tools.find(t => t.name === toolName);
-
         const id = `node-${++this.nodeIdCounter}`;
         const nodeX = x ?? 100 + (this.nodes.size * 220);
         const nodeY = y ?? 150;
-
-        // Build schema from tool definition OR from preset params
         let inputSchema = tool?.inputSchema || null;
         if (!inputSchema && presetParams && Object.keys(presetParams).length > 0) {
             inputSchema = {
@@ -182,7 +149,6 @@ class WorkflowEditor {
                 )
             };
         }
-
         const node = {
             id,
             type: 'tool',
@@ -193,12 +159,10 @@ class WorkflowEditor {
             inputSchema,
             description: tool?.description || toolName
         };
-
         this.nodes.set(id, node);
         this.renderNode(node);
         return node;
     }
-
     addAgentNode(x = null, y = null, preset = null) {
         const id = preset?.id || `node-${++this.nodeIdCounter}`;
         const node = {
@@ -220,12 +184,10 @@ class WorkflowEditor {
             y: y ?? 150,
             description: 'Workflow-local agent activity'
         };
-
         this.nodes.set(id, node);
         this.renderNode(node);
         return node;
     }
-
     renameNodeId(node, newId) {
         if (!node || !newId || node.id === newId) return node;
         const oldId = node.id;
@@ -245,23 +207,19 @@ class WorkflowEditor {
         }));
         return node;
     }
-
     renderNode(node) {
         const nodeEl = document.createElement('div');
         nodeEl.className = `workflow-node ${node.type === 'agent' ? 'agent-node' : 'tool-node'}`;
         nodeEl.id = node.id;
         nodeEl.style.left = `${node.x}px`;
         nodeEl.style.top = `${node.y}px`;
-
         if (node.type === 'agent') {
             this.renderAgentNode(node, nodeEl);
             this.canvas.appendChild(nodeEl);
             return;
         }
-
         const params = node.inputSchema?.properties || {};
         const paramKeys = Object.keys(params).slice(0, 3); // Show first 3 params
-
         nodeEl.innerHTML = `
             <div class="node-header" data-node="${node.id}">
                 <span class="node-title">${node.tool}</span>
@@ -285,20 +243,14 @@ class WorkflowEditor {
                 <div class="node-connector output" data-node="${node.id}" data-type="output" title="Output"></div>
             </div>
         `;
-
-        // Event: Delete node
         nodeEl.querySelector('.node-delete-btn').addEventListener('click', (e) => {
             e.stopPropagation();
             this.deleteNode(node.id);
         });
-
-        // Event: Drag node
         nodeEl.querySelector('.node-header').addEventListener('mousedown', (e) => {
             e.stopPropagation();
             this.startDragging(node.id, e);
         });
-
-        // Event: Param change
         nodeEl.querySelectorAll('.node-param-input').forEach(input => {
             input.addEventListener('change', (e) => {
                 const nodeId = e.target.dataset.node;
@@ -309,30 +261,9 @@ class WorkflowEditor {
                 }
             });
         });
-
-        // Event: Start connecting
-        nodeEl.querySelectorAll('.node-connector').forEach(connector => {
-            connector.addEventListener('mousedown', (e) => {
-                e.stopPropagation();
-                const nodeId = e.target.dataset.node;
-                const type = e.target.dataset.type;
-                if (type === 'output') {
-                    this.startConnecting(nodeId, e);
-                }
-            });
-            connector.addEventListener('mouseup', (e) => {
-                e.stopPropagation();
-                const nodeId = e.target.dataset.node;
-                const type = e.target.dataset.type;
-                if (type === 'input' && this.connectingFrom) {
-                    this.finishConnecting(nodeId);
-                }
-            });
-        });
-
+        this.bindNodeConnectors(nodeEl);
         this.canvas.appendChild(nodeEl);
     }
-
     renderAgentNode(node, nodeEl) {
         const requiredOutput = JSON.stringify(node.required_output || { next_params: 'object' }, null, 2);
         nodeEl.innerHTML = `
@@ -395,17 +326,14 @@ class WorkflowEditor {
                 <div class="node-connector output" data-node="${node.id}" data-type="output" title="Output"></div>
             </div>
         `;
-
         nodeEl.querySelector('.node-delete-btn').addEventListener('click', (e) => {
             e.stopPropagation();
             this.deleteNode(node.id);
         });
-
         nodeEl.querySelector('.node-header').addEventListener('mousedown', (e) => {
             e.stopPropagation();
             this.startDragging(node.id, e);
         });
-
         nodeEl.querySelectorAll('.node-agent-input').forEach(input => {
             input.addEventListener('change', (e) => {
                 const n = this.nodes.get(e.target.dataset.node);
@@ -426,9 +354,7 @@ class WorkflowEditor {
                 n[field] = e.target.value;
             });
         });
-
         this.bindNodeConnectors(nodeEl);
-
         nodeEl.querySelectorAll('.node-agent-llm-input').forEach(input => {
             input.addEventListener('change', (e) => {
                 const n = this.nodes.get(e.target.dataset.node);
@@ -447,7 +373,6 @@ class WorkflowEditor {
             console.warn('Failed to load workflow agent models:', error);
         });
     }
-
     renderProviderOptions(selectedProvider) {
         const providers = [''].concat(Array.isArray(this.providers) ? this.providers : []);
         const unique = Array.from(new Set(providers.map(provider => String(provider || '').trim())));
@@ -457,7 +382,6 @@ class WorkflowEditor {
             return `<option value="${provider}" ${selected}>${label}</option>`;
         }).join('');
     }
-
     renderModelOptions(selectedModel, models = []) {
         const options = [''].concat(models || []);
         if (selectedModel && !options.includes(selectedModel)) options.push(selectedModel);
@@ -467,7 +391,6 @@ class WorkflowEditor {
             return `<option value="${model}" ${selected}>${label}</option>`;
         }).join('');
     }
-
     async populateAgentModelOptions(nodeEl, node) {
         const modelSelect = nodeEl.querySelector('[data-llm-field="model"]');
         if (!modelSelect) return;
@@ -480,28 +403,23 @@ class WorkflowEditor {
         const models = await window.electronAPI.llm.getModels(provider, false);
         modelSelect.innerHTML = this.renderModelOptions(selected, Array.isArray(models) ? models : []);
     }
-
     bindNodeConnectors(nodeEl) {
         nodeEl.querySelectorAll('.node-connector').forEach(connector => {
             connector.addEventListener('mousedown', (e) => {
+                e.preventDefault();
                 e.stopPropagation();
                 const nodeId = e.target.dataset.node;
                 const type = e.target.dataset.type;
                 if (type === 'output') {
                     this.startConnecting(nodeId, e);
+                    return;
                 }
-            });
-            connector.addEventListener('mouseup', (e) => {
-                e.stopPropagation();
-                const nodeId = e.target.dataset.node;
-                const type = e.target.dataset.type;
                 if (type === 'input' && this.connectingFrom) {
                     this.finishConnecting(nodeId);
                 }
             });
         });
     }
-
     deleteNode(nodeId) {
         const nodeEl = document.getElementById(nodeId);
         if (nodeEl) nodeEl.remove();
@@ -509,7 +427,6 @@ class WorkflowEditor {
         this.connections = this.connections.filter(c => c.from !== nodeId && c.to !== nodeId);
         this.renderConnections();
     }
-
     startDragging(nodeId, e) {
         this.draggingNode = {
             id: nodeId,
@@ -518,38 +435,50 @@ class WorkflowEditor {
             nodeStartX: this.nodes.get(nodeId)?.x || 0,
             nodeStartY: this.nodes.get(nodeId)?.y || 0
         };
+        window.getSelection?.().removeAllRanges?.();
+        this.canvasContainer?.classList.add('workflow-interacting');
     }
-
     startConnecting(nodeId, e) {
         this.connectingFrom = nodeId;
-        // Could show a preview line here
+        this.connectMoved = false;
+        const rect = this.canvas?.getBoundingClientRect?.();
+        if (rect) this.connectingPointer = { x: (e.clientX - rect.left) / this.zoom, y: (e.clientY - rect.top) / this.zoom };
+        window.getSelection?.().removeAllRanges?.();
+        this.canvasContainer?.classList.add('workflow-interacting');
+        this.renderConnections();
     }
-
     finishConnecting(toNodeId) {
         if (this.connectingFrom && this.connectingFrom !== toNodeId) {
-            // Check for duplicate
             const exists = this.connections.some(c =>
                 c.from === this.connectingFrom && c.to === toNodeId
             );
             if (!exists) {
                 this.connections.push({ from: this.connectingFrom, to: toNodeId });
-                this.renderConnections();
             }
         }
         this.connectingFrom = null;
+        this.connectingPointer = null;
+        this.connectMoved = false;
+        this.canvasContainer?.classList.remove('workflow-interacting');
+        this.renderConnections();
     }
-
     onCanvasMouseDown(e) {
-        // Deselect on canvas click
         if (e.target === this.canvas) {
             this.selectedNode = null;
+            if (this.connectingFrom) {
+                this.connectingFrom = null;
+                this.connectingPointer = null;
+                this.connectMoved = false;
+                this.canvasContainer?.classList.remove('workflow-interacting');
+                this.renderConnections();
+            }
         }
     }
-
     onCanvasMouseMove(e) {
         if (this.draggingNode) {
-            const dx = e.clientX - this.draggingNode.startX;
-            const dy = e.clientY - this.draggingNode.startY;
+            e.preventDefault?.();
+            const dx = (e.clientX - this.draggingNode.startX) / this.zoom;
+            const dy = (e.clientY - this.draggingNode.startY) / this.zoom;
             const node = this.nodes.get(this.draggingNode.id);
             if (node) {
                 node.x = this.draggingNode.nodeStartX + dx;
@@ -561,23 +490,46 @@ class WorkflowEditor {
                 }
                 this.renderConnections();
             }
+            return;
+        }
+        if (this.connectingFrom && this.canvas) {
+            const rect = this.canvas.getBoundingClientRect();
+            this.connectingPointer = { x: (e.clientX - rect.left) / this.zoom, y: (e.clientY - rect.top) / this.zoom };
+            this.connectMoved = true;
+            this.renderConnections();
         }
     }
-
     onCanvasMouseUp(e) {
-        this.draggingNode = null;
-        this.connectingFrom = null;
+        if (this.draggingNode) {
+            this.draggingNode = null;
+            if (!this.connectingFrom) this.canvasContainer?.classList.remove('workflow-interacting');
+            return;
+        }
+        if (!this.connectingFrom) {
+            this.canvasContainer?.classList.remove('workflow-interacting');
+            return;
+        }
+        const direct = e.target?.closest?.('.node-connector.input');
+        const hover = direct || document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.node-connector.input');
+        if (hover?.dataset?.node) {
+            this.finishConnecting(hover.dataset.node);
+            return;
+        }
+        if (this.connectMoved) {
+            this.connectingFrom = null;
+            this.connectingPointer = null;
+            this.connectMoved = false;
+            this.canvasContainer?.classList.remove('workflow-interacting');
+            this.renderConnections();
+        }
     }
-
     renderConnections() {
         if (!this.connectionsLayer) return;
-
         let svg = '';
         this.connections.forEach(conn => {
             const fromNode = this.nodes.get(conn.from);
             const toNode = this.nodes.get(conn.to);
             if (!fromNode || !toNode) return;
-
             const fromEl = document.getElementById(fromNode.id);
             const toEl = document.getElementById(toNode.id);
             const fromWidth = fromEl?.offsetWidth || (fromNode.type === 'agent' ? 240 : 200);
@@ -587,36 +539,48 @@ class WorkflowEditor {
             const fromY = fromNode.y + (fromHeight / 2);
             const toX = toNode.x;
             const toY = toNode.y + (toHeight / 2);
-
-            // Bezier curve
             const cx1 = fromX + 50;
             const cy1 = fromY;
             const cx2 = toX - 50;
             const cy2 = toY;
-
             svg += `<path d="M ${fromX} ${fromY} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${toX} ${toY}" 
                           class="connection-line" stroke="#4ade80" stroke-width="2" fill="none"/>`;
         });
-
+        if (this.connectingFrom && this.connectingPointer) {
+            const fromNode = this.nodes.get(this.connectingFrom);
+            const fromEl = fromNode ? document.getElementById(fromNode.id) : null;
+            if (fromNode) {
+                const fromWidth = fromEl?.offsetWidth || (fromNode.type === 'agent' ? 240 : 200);
+                const fromHeight = fromEl?.offsetHeight || 80;
+                const fromX = fromNode.x + fromWidth;
+                const fromY = fromNode.y + (fromHeight / 2);
+                const toX = this.connectingPointer.x;
+                const toY = this.connectingPointer.y;
+                const cx1 = fromX + 50;
+                const cx2 = toX - 50;
+                svg += `<path d="M ${fromX} ${fromY} C ${cx1} ${fromY}, ${cx2} ${toY}, ${toX} ${toY}" class="connection-line connection-line-preview" stroke="#60a5fa" stroke-width="2" stroke-dasharray="6 4" fill="none"/>`;
+            }
+        }
         this.connectionsLayer.innerHTML = svg;
     }
-
     setZoom(level) {
         this.zoom = Math.max(0.5, Math.min(2, level));
         document.getElementById('zoom-level').textContent = `${Math.round(this.zoom * 100)}%`;
         this.canvas.style.transform = `scale(${this.zoom})`;
     }
-
     newWorkflow() {
         document.getElementById('workflow-name-input').value = '';
         this.nodes.clear();
         this.connections = [];
+        this.connectingFrom = null;
+        this.connectingPointer = null;
+        this.connectMoved = false;
         this.canvas.innerHTML = '';
         this.connectionsLayer.innerHTML = '';
+        this.canvasContainer?.classList.remove('workflow-interacting');
         this.nodeIdCounter = 0;
         this.currentWorkflowId = null;
     }
-
     serializeNode(node) {
         if (node.type === 'agent') {
             return {
@@ -640,13 +604,11 @@ class WorkflowEditor {
             params_from: node.params_from
         };
     }
-
     getWorkflowLabel(node) {
         return node.type === 'agent'
             ? `agent:${node.agent || node.name || node.id}`
             : node.tool;
     }
-
     compactLlmOverride(llm = {}) {
         const compact = {};
         if (llm.provider) compact.provider = llm.provider;
@@ -654,25 +616,20 @@ class WorkflowEditor {
         if (llm.on_error && llm.on_error !== 'default') compact.on_error = llm.on_error;
         return Object.keys(compact).length > 0 ? compact : undefined;
     }
-
     async saveWorkflow({ silent = false } = {}) {
         const name = document.getElementById('workflow-name-input')?.value.trim();
         if (!name) {
             window.mainPanel?.showNotification('Please enter a workflow name', 'error');
             return;
         }
-
         if (this.nodes.size === 0) {
             window.mainPanel?.showNotification('Add at least one node', 'error');
             return;
         }
-
-        // Convert nodes to workflow step format
         const toolChain = this.getExecutionOrder().map(nodeId => {
             const node = this.nodes.get(nodeId);
             return this.serializeNode(node);
         });
-
         const workflow = {
             name,
             description: `Visual workflow: ${Array.from(this.nodes.values()).map(n => this.getWorkflowLabel(n)).join(' -> ')}`,
@@ -682,7 +639,6 @@ class WorkflowEditor {
                 connections: this.connections
             }
         };
-
         try {
             const result = this.currentWorkflowId && window.electronAPI.updateWorkflow
                 ? await window.electronAPI.updateWorkflow(this.currentWorkflowId, workflow)
@@ -699,27 +655,21 @@ class WorkflowEditor {
             return null;
         }
     }
-
     getExecutionOrder() {
-        // Topological sort based on connections
         const inDegree = new Map();
         const adjacency = new Map();
-
         for (const [id] of this.nodes) {
             inDegree.set(id, 0);
             adjacency.set(id, []);
         }
-
         this.connections.forEach(conn => {
             adjacency.get(conn.from)?.push(conn.to);
             inDegree.set(conn.to, (inDegree.get(conn.to) || 0) + 1);
         });
-
         const queue = [];
         for (const [id, degree] of inDegree) {
             if (degree === 0) queue.push(id);
         }
-
         const order = [];
         while (queue.length > 0) {
             const current = queue.shift();
@@ -731,26 +681,20 @@ class WorkflowEditor {
                 }
             }
         }
-
         return order;
     }
-
     async runWorkflow() {
         const toolChain = this.getExecutionOrder().map(nodeId => {
             const node = this.nodes.get(nodeId);
             return { ...this.serializeNode(node), nodeId };
         });
-
         if (toolChain.length === 0) {
             window.mainPanel?.showNotification('No nodes to execute', 'error');
             return;
         }
-
-        // Switch to chat tab and post workflow start
         window.sidebar?.switchTab?.('chat');
         const workflowName = document.getElementById('workflow-name-input')?.value || 'Unnamed Workflow';
         window.mainPanel?.addMessage('system', `▶️ **Running workflow: ${workflowName}** (${toolChain.length} steps)`);
-
         if (toolChain.some(step => step.type === 'agent')) {
             const saved = await this.saveWorkflow({ silent: true });
             if (!saved?.id) {
@@ -774,24 +718,17 @@ class WorkflowEditor {
             await this.loadSavedWorkflows();
             return;
         }
-
         let allSuccess = true;
-
         for (const step of toolChain) {
             try {
-                // Highlight executing node on canvas
                 const nodeEl = document.getElementById(step.nodeId);
                 if (nodeEl) nodeEl.classList.add('executing');
-
                 const result = await window.electronAPI.executeMCPTool(step.tool, step.params);
-
                 if (nodeEl) {
                     nodeEl.classList.remove('executing');
                     nodeEl.classList.add('executed');
                     setTimeout(() => nodeEl.classList.remove('executed'), 3000);
                 }
-
-                // Post result to chat
                 const preview = typeof result === 'object' ? JSON.stringify(result, null, 2).slice(0, 500) : String(result).slice(0, 500);
                 window.mainPanel?.addMessage('system', `✅ **${step.tool}**\n\`\`\`\n${preview}\n\`\`\``);
             } catch (error) {
@@ -805,17 +742,13 @@ class WorkflowEditor {
                 break;
             }
         }
-
         window.mainPanel?.addMessage('system', allSuccess
             ? `🎉 **Workflow "${workflowName}" completed successfully!**`
             : `⚠️ **Workflow "${workflowName}" stopped due to error**`);
     }
-
     async loadSavedWorkflows() {
         try {
             const workflows = await window.electronAPI.getWorkflows?.() || [];
-
-            // 1) Workflow Tab panel — all workflows, full controls
             const tabListEl = document.getElementById('workflows-list');
             if (tabListEl) {
                 if (workflows.length === 0) {
@@ -824,14 +757,11 @@ class WorkflowEditor {
                     this._renderWorkflowList(tabListEl, workflows, true);
                 }
             }
-
-            // 2) Right sidebar widget — only recently-used workflows (compact)
             const sidebarListEl = document.getElementById('saved-workflows-list');
             if (sidebarListEl) {
                 const recentWorkflows = workflows
                     .filter(w => w.last_used || (w.success_count || 0) + (w.failure_count || 0) > 0)
                     .slice(0, 5);
-
                 if (recentWorkflows.length === 0) {
                     sidebarListEl.innerHTML = '<div class="no-workflows" style="font-size:0.75rem;padding:0.5rem;">No active workflows</div>';
                 } else {
@@ -842,7 +772,6 @@ class WorkflowEditor {
             console.error('Failed to load workflows:', error);
         }
     }
-
     /**
      * Render workflow items into a container
      * @param {HTMLElement} container - target element
@@ -856,14 +785,12 @@ class WorkflowEditor {
             const toolNames = tools.map(s => s.tool || `agent:${s.agent || s.id || s.name || 'step'}`).join(' → ');
             const stats = (w.success_count || 0) + (w.failure_count || 0);
             const successRate = stats > 0 ? Math.round(((w.success_count || 0) / stats) * 100) : null;
-
             const actionBtns = fullControls
                 ? `<button class="load-workflow-btn icon-btn" data-id="${w.id}" title="Load into editor">📂</button>
                    <button class="copy-workflow-btn icon-btn" data-id="${w.id}" title="Copy workflow">📋</button>
                    <button class="run-saved-workflow-btn icon-btn" data-id="${w.id}" title="Run workflow">▶️</button>
                    <button class="delete-workflow-btn icon-btn" data-id="${w.id}" title="Delete">🗑️</button>`
                 : `<button class="run-saved-workflow-btn icon-btn" data-id="${w.id}" title="Run workflow">▶️</button>`;
-
             return `
             <div class="saved-workflow-item" data-id="${w.id}" title="${w.description || ''}">
                 <div class="workflow-item-info">
@@ -876,8 +803,6 @@ class WorkflowEditor {
                 </div>
             </div>
         `}).join('');
-
-        // Wire event handlers
         if (fullControls) {
             container.querySelectorAll('.load-workflow-btn').forEach(btn => {
                 btn.addEventListener('click', () => this.loadWorkflow(btn.dataset.id));
@@ -903,24 +828,17 @@ class WorkflowEditor {
                 });
             });
         }
-
-        // Run button — available in both views
         container.querySelectorAll('.run-saved-workflow-btn').forEach(btn => {
             btn.addEventListener('click', async () => {
                 try {
                     btn.textContent = '⏳';
                     const wfId = parseInt(btn.dataset.id);
-
-                    // Switch to chat and post start
                     window.sidebar?.switchTab?.('chat');
                     const wfItem = btn.closest('.saved-workflow-item');
                     const wfName = wfItem?.querySelector('.workflow-item-name')?.textContent?.replace('🔄 ', '') || `Workflow #${wfId}`;
                     window.mainPanel?.addMessage('system', `▶️ **Running workflow: ${wfName}**`);
-
                     const result = await window.electronAPI.runWorkflow(wfId);
                     btn.textContent = '▶️';
-
-                    // Post each tool result to chat
                     if (result.results) {
                         for (const r of result.results) {
                             if (r.success) {
@@ -931,11 +849,9 @@ class WorkflowEditor {
                             }
                         }
                     }
-
                     window.mainPanel?.addMessage('system', result.success
                         ? `🎉 **Workflow "${wfName}" completed!**`
                         : `⚠️ **Workflow "${wfName}" failed**`);
-
                     await this.loadSavedWorkflows();
                 } catch (error) {
                     btn.textContent = '▶️';
@@ -945,23 +861,18 @@ class WorkflowEditor {
             });
         });
     }
-
     async loadWorkflow(workflowId) {
         try {
             const workflows = await window.electronAPI.getWorkflows?.() || [];
             const workflow = workflows.find(w => w.id == workflowId);
             if (!workflow) return;
-
             this.newWorkflow();
             this.currentWorkflowId = workflow.id;
             document.getElementById('workflow-name-input').value = workflow.name;
-
-            // Try to load visual data first
             if (workflow.visual_data) {
                 const visualData = typeof workflow.visual_data === 'string'
                     ? JSON.parse(workflow.visual_data)
                     : workflow.visual_data;
-
                 visualData.nodes?.forEach(node => {
                     if (node.type === 'agent') {
                         this.addAgentNode(node.x, node.y, node);
@@ -973,15 +884,12 @@ class WorkflowEditor {
                         if (newNode && node.id) this.renameNodeId(newNode, node.id);
                     }
                 });
-
                 this.connections = visualData.connections || [];
                 this.renderConnections();
             } else {
-                // Fall back to tool_chain format
                 const toolChain = typeof workflow.tool_chain === 'string'
                     ? JSON.parse(workflow.tool_chain)
                     : workflow.tool_chain;
-
                 toolChain.forEach((step, idx) => {
                     if (String(step.type || '').toLowerCase() === 'agent' || !step.tool) {
                         this.addAgentNode(100 + idx * 220, 150, step);
@@ -993,15 +901,12 @@ class WorkflowEditor {
                         }
                     }
                 });
-
-                // Auto-connect in sequence
                 const nodeIds = Array.from(this.nodes.keys());
                 for (let i = 0; i < nodeIds.length - 1; i++) {
                     this.connections.push({ from: nodeIds[i], to: nodeIds[i + 1] });
                 }
                 this.renderConnections();
             }
-
             this.nodeIdCounter = Math.max(
                 this.nodeIdCounter,
                 ...Array.from(this.nodes.keys()).map(id => {
@@ -1015,6 +920,4 @@ class WorkflowEditor {
         }
     }
 }
-
-// Export for use
 window.WorkflowEditor = WorkflowEditor;

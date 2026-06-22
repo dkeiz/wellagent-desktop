@@ -99,8 +99,9 @@ async function getEffectiveLlmSelection(db) {
 
   if (configuredProvider || configuredModel) {
     const provider = configuredProvider || lastWorking?.provider || 'ollama';
-    const model = configuredModel
-      || ((lastWorking?.provider || '') === provider ? (lastWorking?.model || null) : null);
+    const model = configuredProvider
+      ? (configuredModel || null)
+      : ((lastWorking?.provider || '') === provider ? (lastWorking?.model || null) : null);
     return {
       provider,
       model,
@@ -137,6 +138,7 @@ async function saveActiveSelection(db, provider, model) {
     }
     await db.saveSetting('llm.lastWorkingModel', normalizedModel);
   } else {
+    await db.saveSetting('llm.model', '');
     // Prevent stale cross-provider fallback from pinning an old model.
     await db.saveSetting('llm.lastWorkingModel', '');
   }

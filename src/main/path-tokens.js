@@ -29,7 +29,7 @@ async function resolveAgentHome(agentManager, context = {}) {
         : null;
 }
 
-async function buildPathTokenMap({ agentManager = null, sessionWorkspace = null, context = {}, sessionId = null, agentId = null } = {}) {
+async function buildPathTokenMap({ agentManager = null, sessionWorkspace = null, executionDirectory = null, context = {}, sessionId = null, agentId = null } = {}) {
     const agentinRoot = inferAgentinRoot(agentManager, sessionWorkspace);
     const sid = sessionId ?? context.sessionId ?? context.session_id ?? 'default';
     const effectiveContext = {
@@ -40,6 +40,9 @@ async function buildPathTokenMap({ agentManager = null, sessionWorkspace = null,
     const workspace = sessionWorkspace?.getWorkspacePath
         ? sessionWorkspace.getWorkspacePath(sid)
         : path.join(agentinRoot, 'workspaces', String(sid));
+    const executionRoot = context.executionRoot
+        || context.execution_root
+        || (executionDirectory?.getRoot ? await executionDirectory.getRoot() : null);
 
     const tokens = {
         '{agentin}': agentinRoot,
@@ -47,6 +50,11 @@ async function buildPathTokenMap({ agentManager = null, sessionWorkspace = null,
         '{knowledge}': path.join(agentinRoot, 'knowledge'),
         '{memory}': path.join(agentinRoot, 'memory')
     };
+
+    if (executionRoot) {
+        tokens['{execution}'] = executionRoot;
+        tokens['{project}'] = executionRoot;
+    }
 
     if (agentHome) {
         tokens['{agent_home}'] = agentHome;

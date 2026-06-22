@@ -1,6 +1,8 @@
 @import url('./layout/layout-core.css');
-@import url('./layout/layout-widgets.css');
+@import url('./layout/layout-widgets.css?v=3');
 @import url('./layout/layout-chat.css');
 @import url('./layout/layout-tools.css');
 @import url('./layout/layout-workflows.css?v=2');
-@import url('./layout/layout-sidebar.css');
+@import url('./layout/layout-sidebar.css?v=7');
+@import url('./layout/layout-desktop-split.css?v=1');
+@import url('./layout/layout-statusbar.css?v=1');

@@ -1,26 +1,37 @@
 /* Design D - Light Theme (Clean) */
 
+html[data-active-skin="design-d"][data-theme="light"],
 html[data-skin-contract-token="design-d"][data-skin-theme-token="light"] {
-    --skin-main-bg: #ffffff;
-    --skin-sidebar-bg: #f9f9f9;
-    --skin-input-bg: #f4f4f4;
-    --skin-hover-bg: rgba(0, 0, 0, 0.05);
-    --skin-btn-bg: #e5e5e5;
-    
-    --skin-border-light: rgba(0, 0, 0, 0.04);
-    
-    --skin-text-main: #0d0d0d;
-    --skin-text-muted: #666666;
-    --skin-text-dim: #999999;
-    
-    --skin-accent: #000000;
-    --skin-accent-text: #ffffff;
-    
-    --skin-shadow-float: 0 4px 20px rgba(0, 0, 0, 0.05);
+  --skin-theme-id: light;
 
-    /* General application variable overrides */
-    --bg-base: var(--skin-main-bg);
-    --bg-panel: var(--skin-sidebar-bg);
-    --text-main: var(--skin-text-main);
-    --text-muted: var(--skin-text-muted);
+  --main-bg: #ffffff;
+  --sidebar-bg: #f9f9f9;
+  --chat-bg: #ffffff;
+  --card-bg: #f4f4f4;
+  --bg-secondary: #f2f2f2;
+  --bg-tertiary: #ebebeb;
+  --text-primary: #0d0d0d;
+  --text-secondary: #666666;
+  --text-muted: #8f8f8f;
+  --text-color: #0d0d0d;
+  --border-color: transparent;
+  --hover-bg: rgba(0, 0, 0, 0.05);
+  --active-bg: rgba(0, 0, 0, 0.09);
+  --primary-color: #000000;
+  --user-msg-bg: #000000;
+  --user-msg-text: #ffffff;
+  --input-bg: #f4f4f4;
+
+  --skin-main-bg: var(--main-bg);
+  --skin-sidebar-bg: var(--sidebar-bg);
+  --skin-input-bg: var(--input-bg);
+  --skin-hover-bg: var(--hover-bg);
+  --skin-btn-bg: #e5e5e5;
+  --skin-border-light: transparent;
+  --skin-text-main: var(--text-primary);
+  --skin-text-muted: var(--text-secondary);
+  --skin-text-dim: var(--text-muted);
+  --skin-accent: var(--primary-color);
+  --skin-accent-text: var(--user-msg-text);
+  --skin-shadow-float: 0 4px 20px rgba(0, 0, 0, 0.05);
 }

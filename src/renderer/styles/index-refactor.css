@@ -1,0 +1,49 @@
+.llm-tab-compact {
+  padding: 0.25rem;
+}
+
+.llm-tab-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.2rem;
+}
+
+.llm-settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.llm-section-title {
+  margin: 0 0 0.1rem;
+  font-size: 1rem;
+}
+
+.llm-subsection-title {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+}
+
+.layout-reset-margin {
+  margin: 0;
+}
+
+.system-prompt-textarea {
+  width: 100%;
+  min-height: 20rem;
+  margin: 0 0 0.1rem;
+}
+
+.prompt-rules-list-spacing {
+  margin: 0 0 0.25rem;
+}
+
+.api-model-capabilities-note {
+  margin-bottom: 10px;
+  color: #666;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.initially-hidden {
+  display: none;
+}

@@ -11,7 +11,8 @@
       this.header.addEventListener('click', (event) => {
         const clickedCollapseArrow = Boolean(event.target.closest('.collapse-arrow'));
         if (clickedCollapseArrow) {
-          this.widget.classList.toggle('collapsed');
+          const collapsed = this.widget.classList.toggle('collapsed');
+          window.LocalAgentLayoutMode?.setSidebarSectionCollapsed?.('workflows', collapsed);
           return;
         }
         const workflowsNavButton = document.querySelector('.nav-btn[data-tab="workflows"]');

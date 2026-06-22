@@ -6,7 +6,8 @@
             "icon": "🌐",
             "tools": [
                 "search_web_bing",
-                "fetch_url"
+                "fetch_url",
+                "inner_browser"
             ],
             "defaultActive": true
         },
@@ -54,11 +55,13 @@
                 "conversation_history",
                 "search_conversations",
                 "subagent",
+                "display_content",
                 "get_system_prompt",
                 "list_active_rules",
                 "toggle_rule",
                 "calendar_op",
                 "todo_op",
+                "timer",
                 "automemory",
                 "workflow_op",
                 "research_op"
@@ -94,7 +97,8 @@
             "description": "External service connectors and listeners",
             "icon": "🔌",
             "tools": [
-                "connector_op"
+                "connector_op",
+                "a2a_op"
             ],
             "defaultActive": true
         },
@@ -102,9 +106,10 @@
             "name": "Workspace",
             "description": "Session temp files, command output logs",
             "icon": "📂",
-            "tools": [
+        "tools": [
                 "list_workspace",
-                "search_workspace"
+                "search_workspace",
+                "execution_root"
             ],
             "defaultActive": true
         }

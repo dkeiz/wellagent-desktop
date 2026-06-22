@@ -36,6 +36,7 @@ class MockContainer {
 function buildContainer() {
   const conversations = [];
   const sentEvents = [];
+  const todoSessionRequests = [];
   let msgCounter = 0;
 
   const db = {
@@ -64,7 +65,7 @@ function buildContainer() {
     async getActivePromptRules() { return []; },
     async getChatSessions() { return []; },
     async getCalendarEvents() { return []; },
-    async getTodos() { return []; },
+    async getTodos(sessionId) { todoSessionRequests.push(sessionId); return []; },
     async getWorkflows() { return []; },
     async createChatSession() { return { id: 's-new' }; },
     async setCurrentSession() { return true; },
@@ -162,6 +163,7 @@ function buildContainer() {
       promptFileManager: { syncToFiles: async () => {}, getPaths: () => ({}), syncFromFiles: async () => {}, loadSystemPrompt: async () => 'x', saveSystemPrompt: async () => {}, loadRulesFromFiles: async () => [] },
       agentLoop: { onSessionClose: async () => {}, recordActivity() {}, loadMemoryContext: async () => null, getSession: () => ({ autoMemory: false, idleSeconds: 0 }) },
       connectorRuntime: { listConnectors: async () => [], startConnector: async () => ({}), stopConnector: async () => ({}), getLogs: () => [] },
+      sessionWorkspace: { getWorkspacePath: () => null, listFiles: () => [] },
       dispatcher,
       agentManager: { getAgents: async () => [], getAgent: async () => null, createAgent: async () => ({}), updateAgent: async () => ({}), deleteAgent: async () => ({}), activateAgent: async () => ({}), deactivateAgent: async () => {}, compactAgent: async () => {} },
       eventBus: null,
@@ -171,13 +173,14 @@ function buildContainer() {
       userIdleDebounceMs: 5
     }),
     conversations,
-    sentEvents
+    sentEvents,
+    todoSessionRequests
   };
 }
 
 async function main() {
   const ipcMain = new FakeIpcMain();
-  const { container, conversations, sentEvents } = buildContainer();
+  const { container, conversations, sentEvents, todoSessionRequests } = buildContainer();
   setupIpcHandlers(ipcMain, container);
 
   const t0 = Date.now();
@@ -192,6 +195,9 @@ async function main() {
   const perm = await ipcMain.invoke('execute-mcp-tool', 'perm-tool', { x: 1 });
   assert.strictEqual(perm.needsPermission, true, 'Expected permission flow signal');
   assert(sentEvents.some(e => e.channel === 'tool-permission-request'));
+
+  await ipcMain.invoke('get-todos', 's-todo');
+  assert.deepStrictEqual(todoSessionRequests, ['s-todo'], 'Expected todo IPC to pass through session id');
 
   console.log('[test-ipc-flow-mocked] PASS');
 }

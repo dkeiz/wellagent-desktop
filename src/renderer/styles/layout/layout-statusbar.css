@@ -1,0 +1,303 @@
+/* ======================================================
+   Status Bar - Desktop split bottom bar
+   Scoped under [data-layout-mode="desktop"]
+   ====================================================== */
+
+.status-bar {
+    display: none;
+}
+
+[data-layout-mode="desktop"] .status-bar {
+    grid-area: statusbar;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 28px;
+    min-height: 28px;
+    padding: 0 0.5rem;
+    background: var(--sidebar-bg);
+    border-top: 1px solid var(--border-color);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    z-index: 10;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+/* --- Status bar sections --- */
+.status-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.status-bar-center {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 0;
+    justify-content: center;
+    position: relative;
+}
+
+[data-layout-mode="desktop"] .status-bar-center #artifacts-btn,
+[data-layout-mode="desktop"] .status-bar-center #speak-btn {
+    width: var(--control-h-sm);
+    min-width: var(--control-h-sm);
+    height: var(--control-h-sm);
+    padding: 0;
+    font-size: var(--text-xs);
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+    color: var(--text-secondary);
+    border-radius: 3px;
+}
+
+[data-layout-mode="desktop"] .status-bar-center #artifacts-btn:hover,
+[data-layout-mode="desktop"] .status-bar-center #speak-btn:hover {
+    color: var(--text-primary);
+    background: var(--hover-bg);
+}
+
+[data-layout-mode="desktop"] .status-bar-center .artifacts-popover {
+    top: auto;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.status-bar-right {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.25rem;
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+/* --- Status bar buttons (reused from sidebar footer) --- */
+.status-bar .icon-btn {
+    min-width: var(--control-h-sm);
+    height: var(--control-h-sm);
+    font-size: var(--text-xs);
+    padding: 0 4px;
+    line-height: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: 3px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.status-bar .icon-btn:hover {
+    background: var(--hover-bg);
+    color: var(--text-primary);
+}
+
+/* --- Avatar in status bar --- */
+.status-bar-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    max-width: 56px;
+    max-height: 24px;
+    overflow: hidden;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.status-bar-avatar:empty {
+    display: none;
+}
+
+.status-bar-avatar:hover {
+    opacity: 0.8;
+}
+
+.status-bar-avatar canvas,
+.status-bar-avatar img {
+    height: 22px;
+    width: auto;
+    image-rendering: pixelated;
+}
+
+.status-bar-avatar .statusbar-avatar-widget {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-width: 22px;
+    min-height: 22px;
+    border: none;
+    background: transparent;
+    border-radius: 4px;
+    overflow: visible;
+}
+
+.status-bar-avatar .statusbar-avatar-widget .widget-content {
+    padding: 0;
+    overflow: visible;
+}
+
+.status-bar-avatar .statusbar-avatar-preview,
+.status-bar-avatar .statusbar-avatar-fallback {
+    display: block;
+    width: 22px;
+    height: 22px;
+}
+
+.status-bar-avatar .statusbar-avatar-preview {
+    image-rendering: pixelated;
+    object-fit: contain;
+}
+
+.status-bar-avatar .statusbar-avatar-fallback {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    background: var(--hover-bg);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.avatar-flyout-panel {
+    display: none;
+}
+
+.avatar-flyout-panel.avatar-flyout-open {
+    position: fixed;
+    display: flex;
+    z-index: 100;
+    width: 224px;
+    max-width: calc(100vw - 8px);
+    padding: 8px;
+    background: var(--main-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.avatar-flyout-panel.avatar-flyout-open .widget-content {
+    padding: 0;
+}
+
+.avatar-flyout-panel.avatar-flyout-open canvas,
+.avatar-flyout-panel.avatar-flyout-open img {
+    width: 100%;
+    height: auto;
+    max-height: none;
+}
+
+/* --- Calendar button in status bar --- */
+.status-bar-calendar-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: var(--control-h-sm);
+    padding: 0 6px;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+}
+
+.status-bar-calendar-btn:hover {
+    background: var(--hover-bg);
+    color: var(--text-primary);
+}
+
+/* Calendar flyout from status bar */
+[data-layout-mode="desktop"] .calendar-flyout.from-statusbar {
+    position: fixed;
+    bottom: 34px;
+    /* Calendar is the corner control; keep the flyout aligned to that edge. */
+    right: 0.5rem;
+    left: auto;
+    z-index: 100;
+    width: 280px;
+}
+
+/* --- Theme picker in status bar (compact) --- */
+.status-bar-right .theme-picker {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    border: none;
+    padding: 0;
+    background: transparent;
+}
+
+.status-bar-right .theme-btn {
+    flex: 0 0 auto;
+    height: var(--control-h-sm);
+    min-height: var(--control-h-sm);
+    padding: 0 6px;
+    font-size: var(--text-xs);
+    line-height: 1;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+}
+
+.status-bar-right .theme-btn:hover {
+    background: var(--hover-bg);
+    color: var(--text-primary);
+}
+
+.status-bar-right .theme-btn.active {
+    background: var(--active-bg);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+.status-bar-right .theme-icon {
+    font-size: var(--text-xs);
+}
+
+.status-bar-right .theme-label {
+    font-size: var(--text-xs);
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+/* --- Hide sidebar footer in desktop split mode (moved to status bar) --- */
+[data-layout-mode="desktop"] .sidebar-footer {
+    display: none;
+}
+
+/* --- Hide right-panel theme picker in desktop split mode --- */
+[data-layout-mode="desktop"] .widget-panel .theme-picker {
+    display: none;
+}
+
+/* --- Settings flyout adapts to statusbar position --- */
+[data-layout-mode="desktop"] .status-bar .settings-flyout {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 0;
+    z-index: 100;
+    width: 160px;
+}
+
+/* Settings dock in status bar */
+.status-bar .settings-dock {
+    position: relative;
+}

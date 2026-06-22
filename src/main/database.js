@@ -2,31 +2,23 @@ const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
 const { decryptSecret, encryptSecret } = require('./secure-secret-store');
-function resolveDbPath(options = {}) {
-    if (options.dbPath) {
-        return options.dbPath;
-    }
-    const electronApp = options.app || require('electron').app;
-    if (!electronApp || typeof electronApp.getPath !== 'function') {
-        throw new Error('Electron app context is unavailable. Pass dbPath when constructing DatabaseWrapper outside Electron.');
-    }
-    // For packaged app, keep DB with application files.
-    if (electronApp && electronApp.isPackaged) {
-        return path.join(path.dirname(process.execPath), 'agentin', 'memory', 'localagent.db');
-    }
-    return path.join(electronApp.getPath('userData'), 'localagent.db');
-}
+const { resolveDbPath } = require('./database-paths');
+const { runDatabaseMigrations } = require('./database-migrations');
+const { migrateRemoteGatewaySecret, migrateSecretSettingsToCredentials } = require('./settings-security');
 class DatabaseWrapper {
     constructor(options = {}) {
         this.dbPath = resolveDbPath(options);
         fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
         this.db = new Database(this.dbPath);
         this.db.pragma('journal_mode = WAL');
+        this.db.pragma('foreign_keys = ON');
     }
     async init() {
         try {
             await this.createTables();
             await this.migratePlaintextAPIKeys();
+            await migrateSecretSettingsToCredentials(this);
+            await migrateRemoteGatewaySecret(this);
             await this.seedDefaultRules();
             console.log('Database initialized');
         } catch (error) {
@@ -49,185 +41,7 @@ class DatabaseWrapper {
         }
     }
     async createTables() {
-        // Schema migrations - safely add columns/tables if they don't exist
-        const migrations = [
-            'ALTER TABLE conversations ADD COLUMN session_id TEXT',
-            'ALTER TABLE conversations ADD COLUMN metadata TEXT',
-            'ALTER TABLE workflows ADD COLUMN visual_data TEXT',
-            'ALTER TABLE workflows ADD COLUMN execution_count INTEGER DEFAULT 0',
-            'ALTER TABLE chat_sessions ADD COLUMN agent_id INTEGER'
-        ];
-        for (const migration of migrations) {
-            try {
-                this.db.exec(migration);
-            } catch (e) {
-                // Column/table already exists, ignore
-            }
-        }
-        // Create tool_states table if not exists
-        try {
-            this.db.exec(`CREATE TABLE IF NOT EXISTS tool_states (
-                tool_name TEXT PRIMARY KEY,
-                active BOOLEAN DEFAULT TRUE,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`);
-        } catch (e) {
-            // Ignore if exists
-        }
-        const queries = [
-            `CREATE TABLE IF NOT EXISTS calendar_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                start_time DATETIME NOT NULL,
-                duration_minutes INTEGER DEFAULT 60,
-                description TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`,
-            `CREATE TABLE IF NOT EXISTS todos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task TEXT NOT NULL,
-                completed BOOLEAN DEFAULT FALSE,
-                priority INTEGER DEFAULT 1,
-                due_date DATETIME,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`,
-            `CREATE TABLE IF NOT EXISTS conversations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                metadata TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
-            )`,
-            `CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`,
-            `CREATE TABLE IF NOT EXISTS api_keys (
-                provider TEXT PRIMARY KEY,
-                key TEXT NOT NULL,
-                encrypted BOOLEAN DEFAULT FALSE,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`,
-            `CREATE TABLE IF NOT EXISTS prompt_rules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                content TEXT NOT NULL,
-                active BOOLEAN DEFAULT FALSE,
-                type TEXT DEFAULT 'rule',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`,
-            `CREATE TABLE IF NOT EXISTS chat_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT,
-                agent_id INTEGER,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_message_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`,
-            `CREATE TABLE IF NOT EXISTS custom_tools (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                description TEXT NOT NULL,
-                code TEXT NOT NULL,
-                input_schema TEXT,
-                active BOOLEAN DEFAULT FALSE,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`,
-            `CREATE TABLE IF NOT EXISTS workflows (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                trigger_pattern TEXT,
-                tool_chain TEXT NOT NULL,
-                embedding TEXT,
-                visual_data TEXT,
-                execution_count INTEGER DEFAULT 0,
-                success_count INTEGER DEFAULT 0,
-                failure_count INTEGER DEFAULT 0,
-                last_used DATETIME,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`,
-            `CREATE TABLE IF NOT EXISTS agents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                type TEXT NOT NULL DEFAULT 'pro',
-                icon TEXT DEFAULT '🤖',
-                system_prompt TEXT,
-                description TEXT,
-                status TEXT DEFAULT 'idle',
-                config TEXT,
-                folder_path TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`,
-            `CREATE TABLE IF NOT EXISTS subagent_runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                parent_session_id TEXT,
-                child_session_id TEXT NOT NULL,
-                subagent_id INTEGER NOT NULL,
-                task TEXT NOT NULL,
-                contract_type TEXT NOT NULL DEFAULT 'task_complete',
-                expected_output TEXT,
-                status TEXT NOT NULL DEFAULT 'running',
-                result_summary TEXT,
-                result_payload TEXT,
-                artifacts_json TEXT,
-                error TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                completed_at DATETIME,
-                FOREIGN KEY (subagent_id) REFERENCES agents(id),
-                FOREIGN KEY (parent_session_id) REFERENCES chat_sessions(id),
-                FOREIGN KEY (child_session_id) REFERENCES chat_sessions(id)
-            )`,
-            `CREATE TABLE IF NOT EXISTS plugins (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                version TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'disabled',
-                error TEXT,
-                installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`,
-            `CREATE TABLE IF NOT EXISTS knowledge_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                slug TEXT NOT NULL UNIQUE,
-                title TEXT NOT NULL,
-                category TEXT DEFAULT 'general',
-                status TEXT DEFAULT 'staged',
-                tags TEXT,
-                source TEXT,
-                confidence REAL DEFAULT 0.5,
-                folder_path TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                confirmed_at DATETIME
-            )`,
-            `CREATE TABLE IF NOT EXISTS memory_jobs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_type TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                attempts INTEGER NOT NULL DEFAULT 0,
-                next_run_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                locked_at DATETIME,
-                locked_by TEXT,
-                payload_json TEXT,
-                result_summary TEXT,
-                last_error TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`
-        ];
-        for (const query of queries) {
-            this.db.exec(query);
-        }
-        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_jobs_schedule
-            ON memory_jobs (job_type, status, next_run_at, created_at)`);
-        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_jobs_session
-            ON memory_jobs (job_type, session_id, status)`);
+        return runDatabaseMigrations(this.db);
     }
     async migratePlaintextAPIKeys() {
         const rows = this.all(
@@ -252,6 +66,21 @@ class DatabaseWrapper {
         const stmt = this.db.prepare(sql);
         return stmt.all(...params);
     }
+    _mapConversationRow(row) {
+        if (!row) return row;
+        let metadata = row.metadata ?? null;
+        if (typeof metadata === 'string' && metadata.trim()) {
+            try {
+                metadata = JSON.parse(metadata);
+            } catch (_) {
+                metadata = row.metadata;
+            }
+        }
+        return {
+            ...row,
+            metadata: metadata || null
+        };
+    }
     _mapSubagentRun(row) {
         if (!row) return null;
         let resultPayload = null;
@@ -266,18 +95,26 @@ class DatabaseWrapper {
         } catch (error) {
             artifacts = [];
         }
+        let runtimePolicyGrants = {};
+        try {
+            runtimePolicyGrants = row.runtime_policy_grants_json ? JSON.parse(row.runtime_policy_grants_json) : {};
+        } catch (error) {
+            runtimePolicyGrants = {};
+        }
         return {
             ...row,
             result_payload: resultPayload,
             artifacts,
-            artifacts_json: artifacts
+            artifacts_json: artifacts,
+            runtime_policy_profile: row.runtime_policy_profile || 'strict-subagent',
+            runtime_policy_grants: runtimePolicyGrants,
+            runtime_policy_grants_json: runtimePolicyGrants
         };
     }
     close() {
         this.db.close();
         console.log('Database connection closed');
     }
-    // Calendar methods
     async getCalendarEvents() {
         return this.all('SELECT * FROM calendar_events ORDER BY start_time');
     }
@@ -301,42 +138,55 @@ class DatabaseWrapper {
         this.run('DELETE FROM calendar_events WHERE id = ?', [id]);
         return { id };
     }
-    // Todo methods
-    async getTodos() {
+    async getTodos(sessionId = null) {
+        const sid = sessionId === null || sessionId === undefined ? '' : String(sessionId).trim();
+        if (sid) {
+            return this.all('SELECT * FROM todos WHERE session_id = ? ORDER BY priority DESC, created_at', [sid]);
+        }
         return this.all('SELECT * FROM todos ORDER BY priority DESC, created_at');
     }
-    async addTodo(todo) {
+    async addTodo(todo, sessionId = null) {
         const { task, priority = 1, due_date = null } = todo;
+        const sid = sessionId === null || sessionId === undefined ? String(todo.session_id || '').trim() : String(sessionId).trim();
         const result = this.run(
-            'INSERT INTO todos (task, priority, due_date) VALUES (?, ?, ?)',
-            [task, priority, due_date]
+            'INSERT INTO todos (task, priority, due_date, session_id) VALUES (?, ?, ?, ?)',
+            [task, priority, due_date, sid || null]
         );
-        return { ...todo, id: result.id };
+        return { ...todo, session_id: sid || null, id: result.id };
     }
-    async updateTodo(id, todo) {
+    async updateTodo(id, todo, sessionId = null) {
         const { task, completed, priority, due_date } = todo;
-        this.run(
-            'UPDATE todos SET task = ?, completed = ?, priority = ?, due_date = ? WHERE id = ?',
-            [task, completed, priority, due_date, id]
-        );
-        return { id, ...todo };
+        const completedValue = completed === true ? 1 : (completed === false ? 0 : completed);
+        const sid = sessionId === null || sessionId === undefined ? '' : String(sessionId).trim();
+        const result = sid
+            ? this.run('UPDATE todos SET task = ?, completed = ?, priority = ?, due_date = ? WHERE id = ? AND session_id = ?', [task, completedValue, priority, due_date, id, sid])
+            : this.run('UPDATE todos SET task = ?, completed = ?, priority = ?, due_date = ? WHERE id = ?', [task, completedValue, priority, due_date, id]);
+        return { id, ...todo, session_id: sid || todo.session_id || null, changes: result.changes };
     }
-    async deleteTodo(id) {
-        this.run('DELETE FROM todos WHERE id = ?', [id]);
-        return { id };
+    async deleteTodo(id, sessionId = null) {
+        const sid = sessionId === null || sessionId === undefined ? '' : String(sessionId).trim();
+        const result = sid
+            ? this.run('DELETE FROM todos WHERE id = ? AND session_id = ?', [id, sid])
+            : this.run('DELETE FROM todos WHERE id = ?', [id]);
+        return { id, session_id: sid || null, changes: result.changes };
     }
-    // Conversation methods
     async getConversations(limit = 100, sessionId = null) {
+        const normalizedLimit = Math.max(1, parseInt(limit, 10) || 100);
         if (sessionId) {
-            return this.all('SELECT * FROM conversations WHERE session_id = ? ORDER BY timestamp', [sessionId]);
+            return this.all(
+                'SELECT * FROM (SELECT * FROM conversations WHERE session_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC',
+                [sessionId, normalizedLimit]
+            ).map((row) => this._mapConversationRow(row));
         }
-        // Get current session first
         const session = await this.getCurrentSession();
         if (!session) {
             console.log('No current session found');
             return [];
         }
-        return this.all('SELECT * FROM conversations WHERE session_id = ? ORDER BY timestamp', [session.id]);
+        return this.all(
+            'SELECT * FROM (SELECT * FROM conversations WHERE session_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC',
+            [session.id, normalizedLimit]
+        ).map((row) => this._mapConversationRow(row));
     }
     async addConversation(message, sessionId = null) {
         const { role, content, metadata } = message;
@@ -350,7 +200,6 @@ class DatabaseWrapper {
         return message;
     }
     async clearConversations() {
-        // Only clear conversations for current session
         const session = await this.getCurrentSession();
         await this.clearChatSession(session.id);
         return { cleared: true };
@@ -361,15 +210,12 @@ class DatabaseWrapper {
         return { cleared: true, sessionId };
     }
     async deleteAllConversations() {
-        // Privacy feature: Delete ALL conversations and sessions
         this.run('DELETE FROM conversations');
         this.run('DELETE FROM chat_sessions');
-        // Reset current session setting
         this.run("DELETE FROM settings WHERE key = 'current_session_id'");
         console.log('All conversations deleted for privacy');
         return { deleted: true, message: 'All conversation history cleared' };
     }
-    // Prompt Rules methods
     async getPromptRules() {
         return this.all('SELECT * FROM prompt_rules ORDER BY created_at DESC');
     }
@@ -382,7 +228,11 @@ class DatabaseWrapper {
             'INSERT INTO prompt_rules (name, content, type) VALUES (?, ?, ?)',
             [name, content, type]
         );
-        return { ...rule, id: result.id, active: false };
+        const inserted = this.get('SELECT * FROM prompt_rules WHERE id = ?', [result.id]);
+        return {
+            ...inserted,
+            active: inserted?.active === 1 || inserted?.active === true
+        };
     }
     async updatePromptRule(id, rule) {
         const { name, content, active } = rule;
@@ -403,20 +253,17 @@ class DatabaseWrapper {
         this.run('DELETE FROM prompt_rules WHERE id = ?', [id]);
         return { id };
     }
-    // Chat Sessions methods
     async createChatSession(title = null) {
         const result = this.run(
             'INSERT INTO chat_sessions (title) VALUES (?)',
             [title || `Chat ${new Date().toLocaleString()}`]
         );
-        // Set as current session so new messages go here
         await this.setSetting('current_session_id', result.id.toString());
         console.log('Created and switched to new session:', result.id);
         return { id: result.id, title };
     }
     async getChatSessions(date = null, limit = 6) {
         if (date) {
-            // Get sessions for specific date (exclude agent sessions)
             return this.all(`
                 SELECT cs.*, 
                        COUNT(c.id) as message_count,
@@ -429,7 +276,6 @@ class DatabaseWrapper {
                 ORDER BY cs.last_message_at DESC
             `, [date]);
         }
-        // Get last N sessions with messages (exclude agent sessions)
         return this.all(`
             SELECT cs.*, 
                    COUNT(c.id) as message_count,
@@ -445,19 +291,15 @@ class DatabaseWrapper {
     }
     async loadChatSession(sessionId, options = {}) {
         const includeHidden = options?.includeHidden === true;
-        const rows = this.all('SELECT * FROM conversations WHERE session_id = ? ORDER BY timestamp', [sessionId]);
+        const rows = this.all('SELECT * FROM conversations WHERE session_id = ? ORDER BY timestamp', [sessionId])
+            .map((row) => this._mapConversationRow(row));
         if (includeHidden) {
             return rows;
         }
 
         return rows.filter((row) => {
             if (!row?.metadata) return true;
-            try {
-                const metadata = JSON.parse(row.metadata);
-                return metadata?.hidden_from_ui !== true;
-            } catch (_) {
-                return true;
-            }
+            return row.metadata?.hidden_from_ui !== true;
         });
     }
     async deleteChatSession(sessionId) {
@@ -466,7 +308,6 @@ class DatabaseWrapper {
         return { success: true };
     }
     async getCurrentSession() {
-        // Check if there's a current session setting
         const currentId = await this.getSetting('current_session_id');
         if (currentId) {
             const session = this.get('SELECT * FROM chat_sessions WHERE id = ?', [parseInt(currentId)]);
@@ -475,7 +316,6 @@ class DatabaseWrapper {
                 return session;
             }
         }
-        // Otherwise get most recent non-agent session with messages
         const session = this.get(`
             SELECT cs.* FROM chat_sessions cs
             INNER JOIN conversations c ON cs.id = c.session_id
@@ -489,16 +329,29 @@ class DatabaseWrapper {
             return await this.createChatSession();
         }
         console.log('Using most recent session:', session.id);
-        // Set it as current
         await this.setSetting('current_session_id', session.id.toString());
         return session;
     }
     async setCurrentSession(sessionId) {
-        await this.setSetting('current_session_id', sessionId.toString());
-        return { sessionId };
+        const sid = String(sessionId || '').trim();
+        if (!sid) throw new Error('sessionId is required');
+        const session = this.get('SELECT id FROM chat_sessions WHERE id = ?', [sid]);
+        if (!session) throw new Error(`Chat session not found: ${sid}`);
+        await this.setSetting('current_session_id', String(session.id));
+        return { sessionId: session.id };
     }
-    // Settings methods
     async getSetting(key) {
+        try {
+            const row = this.get('SELECT value FROM settings WHERE key = ?', [key]);
+            return row ? row.value : null;
+        } catch (error) {
+            console.error(`Error getting setting '${key}':`, error);
+            return null;
+        }
+    }
+    getSettingSync(key) {
+        // Some companion auth checks happen inside synchronous socket upgrade
+        // paths; keep this as a small sync mirror of getSetting().
         try {
             const row = this.get('SELECT value FROM settings WHERE key = ?', [key]);
             return row ? row.value : null;
@@ -515,11 +368,11 @@ class DatabaseWrapper {
         return { key, value };
     }
     async saveSetting(key, value) {
-        this.run(
-            'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)',
-            [key, value]
-        );
-        return { key, value };
+        return this.setSetting(key, value);
+    }
+    async deleteSetting(key) {
+        this.run('DELETE FROM settings WHERE key = ?', [key]);
+        return { key };
     }
     async getAllSettings() {
         const rows = this.all('SELECT key, value FROM settings');
@@ -542,7 +395,6 @@ class DatabaseWrapper {
         }
         return config;
     }
-    // API Key methods
     async getAPIKey(provider) {
         const normalizedProvider = String(provider || '').trim().toLowerCase();
         if (!normalizedProvider) return null;
@@ -585,12 +437,43 @@ class DatabaseWrapper {
             encrypted: Boolean(row?.encrypted)
         };
     }
+    _credentialProviderName(name) {
+        const normalized = String(name || '').trim().toLowerCase();
+        if (!normalized) throw new Error('Credential name is required');
+        return `credential:${normalized}`;
+    }
+    async getCredential(name) {
+        return this.getAPIKey(this._credentialProviderName(name));
+    }
+    async setCredential(name, value) {
+        const provider = this._credentialProviderName(name);
+        const secret = String(value || '');
+        if (!secret) {
+            this.run('DELETE FROM api_keys WHERE provider = ?', [provider]);
+            return { name, encrypted: false };
+        }
+        const encrypted = encryptSecret(secret);
+        this.run(
+            'INSERT OR REPLACE INTO api_keys (provider, key, encrypted) VALUES (?, ?, ?)',
+            [provider, encrypted.value, encrypted.encrypted ? 1 : 0]
+        );
+        return { name, encrypted: encrypted.encrypted };
+    }
+    async deleteCredential(name) {
+        this.run('DELETE FROM api_keys WHERE provider = ?', [this._credentialProviderName(name)]);
+        return { name };
+    }
+    async getCredentialInfo(name) {
+        const row = this.get('SELECT encrypted FROM api_keys WHERE provider = ?', [this._credentialProviderName(name)]);
+        return {
+            configured: Boolean(row),
+            encrypted: Boolean(row?.encrypted)
+        };
+    }
     async setActiveModel(provider, model) {
-        // Save to settings table
         await this.setSetting(`active_model_${provider}`, model);
         return { provider, model };
     }
-    // Tool activation methods
     async getToolStates() {
         const rows = this.all(`SELECT key, value FROM settings WHERE key LIKE 'tool.%.active'`);
         const states = {};
@@ -627,15 +510,18 @@ class DatabaseWrapper {
         }
         const nextName = String(updates.name ?? current.name).trim();
         const nextDescription = String(updates.description ?? current.description).trim();
+        const nextCode = String(updates.code ?? current.code);
+        const nextInputSchema = JSON.stringify(updates.input_schema ?? JSON.parse(current.input_schema || '{}'));
         if (!nextName) throw new Error('Tool name is required');
         if (!nextDescription) throw new Error('Tool description is required');
+        if (!nextCode.trim()) throw new Error('Tool code is required');
         if (nextName !== current.name) {
             const conflict = await this.getCustomTool(nextName);
             if (conflict) throw new Error(`Tool name "${nextName}" already exists`);
         }
         this.run(
-            'UPDATE custom_tools SET name = ?, description = ? WHERE name = ?',
-            [nextName, nextDescription, existingName]
+            'UPDATE custom_tools SET name = ?, description = ?, code = ?, input_schema = ? WHERE name = ?',
+            [nextName, nextDescription, nextCode, nextInputSchema, existingName]
         );
         if (nextName !== existingName) {
             const oldKey = `tool.${existingName}.active`;
@@ -652,7 +538,79 @@ class DatabaseWrapper {
         this.run('DELETE FROM custom_tools WHERE name = ?', [name]);
         return { name };
     }
-    // Workflow methods
+    async upsertScheduledTimer(timer) {
+        const now = new Date().toISOString();
+        this.run(
+            `INSERT INTO scheduled_timers (
+                timer_id, context_key, context_json, status, due_at, interval_ms,
+                remaining_ms, repeat, message, updated_at, paused_at, fired_at, last_error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(timer_id, context_key) DO UPDATE SET
+                context_json = excluded.context_json,
+                status = excluded.status,
+                due_at = excluded.due_at,
+                interval_ms = excluded.interval_ms,
+                remaining_ms = excluded.remaining_ms,
+                repeat = excluded.repeat,
+                message = excluded.message,
+                updated_at = excluded.updated_at,
+                paused_at = excluded.paused_at,
+                fired_at = excluded.fired_at,
+                last_error = excluded.last_error`,
+            [
+                timer.timer_id,
+                timer.context_key,
+                JSON.stringify(timer.context || {}),
+                timer.status || 'active',
+                timer.due_at || null,
+                Number(timer.interval_ms) || 0,
+                timer.remaining_ms ?? null,
+                timer.repeat ? 1 : 0,
+                timer.message || '',
+                now,
+                timer.paused_at || null,
+                timer.fired_at || null,
+                timer.last_error || null
+            ]
+        );
+        return this.getScheduledTimer(timer.timer_id, timer.context_key);
+    }
+    async getScheduledTimer(timerId, contextKey) {
+        return this.get(
+            'SELECT * FROM scheduled_timers WHERE timer_id = ? AND context_key = ?',
+            [timerId, contextKey]
+        );
+    }
+    async listScheduledTimers(contextKey = null) {
+        if (contextKey) {
+            return this.all(
+                'SELECT * FROM scheduled_timers WHERE context_key = ? AND status IN (?, ?) ORDER BY due_at',
+                [contextKey, 'active', 'paused']
+            );
+        }
+        return this.all(
+            'SELECT * FROM scheduled_timers WHERE status IN (?, ?) ORDER BY due_at',
+            ['active', 'paused']
+        );
+    }
+    async getDueScheduledTimers(nowIso) {
+        return this.all(
+            'SELECT * FROM scheduled_timers WHERE status = ? AND due_at IS NOT NULL AND due_at <= ? ORDER BY due_at',
+            ['active', nowIso]
+        );
+    }
+    async updateScheduledTimerState(timerId, contextKey, updates = {}) {
+        const allowed = ['status', 'due_at', 'remaining_ms', 'paused_at', 'fired_at', 'last_error'];
+        const entries = Object.entries(updates).filter(([key]) => allowed.includes(key));
+        if (entries.length === 0) return this.getScheduledTimer(timerId, contextKey);
+        const sets = entries.map(([key]) => `${key} = ?`).join(', ');
+        const values = entries.map(([, value]) => value);
+        this.run(
+            `UPDATE scheduled_timers SET ${sets}, updated_at = ? WHERE timer_id = ? AND context_key = ?`,
+            [...values, new Date().toISOString(), timerId, contextKey]
+        );
+        return this.getScheduledTimer(timerId, contextKey);
+    }
     async getWorkflows() {
         return this.all('SELECT * FROM workflows ORDER BY success_count DESC, last_used DESC');
     }
@@ -687,15 +645,17 @@ class DatabaseWrapper {
         this.run('UPDATE workflows SET embedding = ? WHERE id = ?', [JSON.stringify(embedding), id]);
         return { id, embedding };
     }
-    // Agent methods
+    _mapAgentRow(row) {
+        return row ? { ...row, visibleInSidebar: row.visible_in_sidebar !== 0 } : row;
+    }
     async getAgents(type = null) {
         if (type) {
-            return this.all('SELECT * FROM agents WHERE type = ? ORDER BY name', [type]);
+            return this.all('SELECT * FROM agents WHERE type = ? ORDER BY name', [type]).map(row => this._mapAgentRow(row));
         }
-        return this.all('SELECT * FROM agents ORDER BY type, name');
+        return this.all('SELECT * FROM agents ORDER BY type, name').map(row => this._mapAgentRow(row));
     }
     async getAgent(id) {
-        return this.get('SELECT * FROM agents WHERE id = ?', [id]);
+        return this._mapAgentRow(this.get('SELECT * FROM agents WHERE id = ?', [id]));
     }
     async addAgent(agent) {
         const { name, type = 'pro', icon = '🤖', system_prompt, description, config, folder_path } = agent;
@@ -703,15 +663,15 @@ class DatabaseWrapper {
             'INSERT INTO agents (name, type, icon, system_prompt, description, config, folder_path) VALUES (?, ?, ?, ?, ?, ?, ?)',
             [name, type, icon, system_prompt || '', description || '', config ? JSON.stringify(config) : null, folder_path || '']
         );
-        return { ...agent, id: result.id, status: 'idle' };
+        return { ...agent, id: result.id, status: 'idle', visibleInSidebar: true };
     }
     async updateAgent(id, data) {
         const fields = [];
         const values = [];
         for (const [key, value] of Object.entries(data)) {
-            if (['name', 'type', 'icon', 'system_prompt', 'description', 'status', 'config', 'folder_path'].includes(key)) {
+            if (['name', 'type', 'icon', 'system_prompt', 'description', 'status', 'config', 'folder_path', 'visible_in_sidebar'].includes(key)) {
                 fields.push(`${key} = ?`);
-                values.push(key === 'config' && typeof value === 'object' ? JSON.stringify(value) : value);
+                values.push(key === 'config' && typeof value === 'object' ? JSON.stringify(value) : (key === 'visible_in_sidebar' ? (value ? 1 : 0) : value));
             }
         }
         if (fields.length === 0) return { id };
@@ -721,8 +681,15 @@ class DatabaseWrapper {
         return { id, ...data };
     }
     async deleteAgent(id) {
+        const sessions = this.all('SELECT id FROM chat_sessions WHERE agent_id = ?', [id]);
+        for (const session of sessions) {
+            this.run('DELETE FROM conversations WHERE session_id = ?', [session.id]);
+        }
+        this.run('DELETE FROM chat_sessions WHERE agent_id = ?', [id]);
+        this.run('DELETE FROM subagent_runs WHERE subagent_id = ?', [id]);
+        this.run('DELETE FROM agent_tool_states WHERE agent_id = ?', [id]);
         this.run('DELETE FROM agents WHERE id = ?', [id]);
-        return { id };
+        return { id, deletedSessions: sessions.length };
     }
     async getAgentSession(agentId) {
         return this.get(`
@@ -748,7 +715,9 @@ class DatabaseWrapper {
             subagentId,
             task,
             contractType = 'task_complete',
-            expectedOutput = ''
+            expectedOutput = '',
+            runtimePolicyProfile = 'strict-subagent',
+            runtimePolicyGrants = {}
         } = run;
         const result = this.run(
             `INSERT INTO subagent_runs (
@@ -758,9 +727,20 @@ class DatabaseWrapper {
                 task,
                 contract_type,
                 expected_output,
+                runtime_policy_profile,
+                runtime_policy_grants_json,
                 status
-            ) VALUES (?, ?, ?, ?, ?, ?, 'running')`,
-            [parentSessionId, childSessionId, subagentId, task, contractType, expectedOutput]
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running')`,
+            [
+                parentSessionId,
+                childSessionId,
+                subagentId,
+                task,
+                contractType,
+                expectedOutput,
+                runtimePolicyProfile || 'strict-subagent',
+                JSON.stringify(runtimePolicyGrants && typeof runtimePolicyGrants === 'object' ? runtimePolicyGrants : {})
+            ]
         );
         return this.getSubagentRun(result.id);
     }
@@ -910,6 +890,29 @@ class DatabaseWrapper {
             [String(summary || ''), payload ? JSON.stringify(payload) : null, jobId]
         );
         return this.getMemoryJob(jobId);
+    }
+    async markDaemonSessionInspected(sessionId, { inspector = 'memory-daemon', jobId = null, notes = '' } = {}) {
+        const sid = String(sessionId || '').trim();
+        if (!sid) {
+            throw new Error('markDaemonSessionInspected requires sessionId');
+        }
+        this.run(
+            `INSERT INTO daemon_session_inspections (session_id, inspector, inspected_at, job_id, notes)
+             VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?)
+             ON CONFLICT(session_id) DO UPDATE SET
+                inspector = excluded.inspector,
+                inspected_at = CURRENT_TIMESTAMP,
+                job_id = excluded.job_id,
+                notes = excluded.notes`,
+            [sid, String(inspector || 'memory-daemon'), jobId, String(notes || '')]
+        );
+        return this.getDaemonSessionInspection(sid);
+    }
+    getDaemonSessionInspection(sessionId) {
+        return this.get('SELECT * FROM daemon_session_inspections WHERE session_id = ?', [String(sessionId || '')]);
+    }
+    getDaemonSessionInspectionStats() {
+        return this.get('SELECT COUNT(*) as count, MAX(inspected_at) as lastInspectedAt FROM daemon_session_inspections') || { count: 0 };
     }
     async failMemoryJob(jobId, error, options = {}) {
         const maxAttempts = Math.max(1, Number(options.maxAttempts) || 5);

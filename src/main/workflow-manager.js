@@ -7,15 +7,16 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { buildRuntimePaths } = require('./runtime-paths');
 const { WorkflowStepExecutor, normalizeStep } = require('./workflow-step-executor');
 
 class WorkflowManager {
-    constructor(db, mcpServer, dispatcher = null) {
+    constructor(db, mcpServer, dispatcher = null, options = {}) {
         this.db = db;
         this.mcpServer = mcpServer;
         this.dispatcher = dispatcher;
         this.workflowRuntime = null;
-        this.workflowsDir = path.join(process.cwd(), 'agentin', 'workflows');
+        this.workflowsDir = options.workflowsDir || buildRuntimePaths(options).workflowBasePath;
         this._ensureDir();
     }
 
@@ -147,7 +148,7 @@ class WorkflowManager {
                     }
                 }
             } catch (err) {
-                console.error(`[WorkflowManager] Error reading ${file}:`, err.message);
+                console.error(`[WorkflowManager] Error reading ${path.basename(filePath)}:`, err.message);
             }
         }
 
@@ -305,7 +306,8 @@ class WorkflowManager {
             'subagent',
             'run_subagent',
             'run_command',
-            'fetch_url'
+            'fetch_url',
+            'inner_browser'
         ]);
         if (chain.length >= 3) {
             return 'async';
@@ -322,7 +324,7 @@ class WorkflowManager {
         const requestedBySessionId = options.requestedBySessionId || null;
 
         if (!this.workflowRuntime) {
-            const result = await this.executeWorkflow(workflowId, paramOverrides);
+            const result = await this.executeWorkflowSteps(workflowId, paramOverrides, { requestedBySessionId });
             return {
                 accepted: true,
                 immediate: true,

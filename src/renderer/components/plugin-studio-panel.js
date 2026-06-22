@@ -9,6 +9,7 @@
             this.title = document.getElementById('plugin-studio-title');
             this.meta = document.getElementById('plugin-studio-meta');
             this.toggleBtn = document.getElementById('plugin-studio-toggle');
+            this.visibilityBtn = document.getElementById('plugin-studio-visibility');
             this.discoverBtn = document.getElementById('plugin-studio-discover');
             this.saveBtn = document.getElementById('plugin-studio-save');
             this.form = document.getElementById('plugin-studio-form');
@@ -30,14 +31,16 @@
 
             this.panel.addEventListener('mousedown', (event) => event.stopPropagation());
             this.toggleBtn.addEventListener('click', () => this.toggleSelected());
+            this.visibilityBtn.addEventListener('click', () => this.toggleSelectedVisibility());
             this.saveBtn.addEventListener('click', () => this.saveConfig());
             this.discoverBtn.addEventListener('click', () => this.runDiscover());
+            this.form.addEventListener('click', (event) => this.handlePluginOwnedChoice(event));
 
-            window.electronAPI.on('plugins:open-studio', async (event, options) => {
+            window.electronAPI.onPluginStudioOpen(async (event, options) => {
                 await this.show(options || {});
             });
 
-            window.electronAPI.on('plugins:state-changed', async (event, payload = {}) => {
+            window.electronAPI.onPluginStateChanged(async (event, payload = {}) => {
                 if (this.overlay.classList.contains('hidden')) return;
                 if (String(payload?.source || '').startsWith('action:')) return;
                 const focused = this.selectedPluginId;
@@ -52,9 +55,10 @@
             if (busy) {
                 button.dataset.originalText = button.textContent;
                 button.textContent = 'Working...';
-            } else if (button.dataset.originalText) {
+            } else if (button.dataset.originalText && button.textContent === 'Working...') {
                 button.textContent = button.dataset.originalText;
             }
+            if (!busy) delete button.dataset.originalText;
         }
 
         setResult(payload) {
@@ -153,6 +157,10 @@
             this.title.textContent = this.selectedDetail?.manifest?.name || plugin.name;
             this.meta.textContent = `${plugin.id} · v${this.selectedDetail?.manifest?.version || '0.0.0'} · ${plugin.status}`;
             this.toggleBtn.textContent = plugin.status === 'enabled' ? 'Disable' : 'Enable';
+            const visible = plugin.visibleInSidebar !== false;
+            this.visibilityBtn.textContent = 'Show';
+            this.visibilityBtn.classList.toggle('active', visible);
+            this.visibilityBtn.title = visible ? 'Shown in right sidebar' : 'Hidden from right sidebar';
             const capabilities = this.selectedDetail?.capabilities || this.selectedDetail?.manifest?.capabilities || [];
             const isTts = capabilities.includes('tts');
             const isEmbeddedTts = plugin.id === 'http-tts-bridge';
@@ -165,11 +173,19 @@
 
         async renderForm() {
             this.form.replaceChildren();
+            this.form.classList.remove('plugin-studio-form-telegram', 'plugin-studio-form-plugin-owned');
             const schema = this.selectedDetail?.manifest?.configSchema || {};
             const entries = Object.entries(schema);
             const isTts = this.isSelectedTts();
             this.form.classList.toggle('plugin-studio-form-tts', isTts);
 
+            if (await this.renderPluginSetupUI()) {
+                return;
+            }
+            if (window.LocalAgentPluginTelegramStudio?.canHandle?.(this)) {
+                await window.LocalAgentPluginTelegramStudio.render(this);
+                return;
+            }
             if (window.LocalAgentPluginTtsStudio?.canHandle?.(this)) {
                 await window.LocalAgentPluginTtsStudio.render(this);
                 return;
@@ -196,6 +212,10 @@
                 const input = this.createConfigInput(type, def);
                 input.dataset.key = key;
                 input.dataset.type = type;
+                if (type === 'boolean' && (def?.display === 'toggle' || def?.control === 'toggle')) {
+                    input.classList.add('plugin-studio-toggle');
+                    input.setAttribute('role', 'switch');
+                }
                 const raw = this.selectedDetail?.config?.[key] ?? def?.default;
 
                 if (input.type === 'checkbox') {
@@ -211,6 +231,56 @@
                 }
                 this.form.appendChild(field);
             });
+        }
+
+        async renderPluginSetupUI() {
+            const plugin = this.getSelectedPlugin();
+            if (!plugin || !window.electronAPI?.plugins?.getSetupUI) return false;
+
+            const setup = await window.electronAPI.plugins.getSetupUI(plugin.id);
+            if (!setup || setup.success === false || !setup.html) return false;
+
+            this.form.classList.add('plugin-studio-form-plugin-owned');
+            if (setup.css) {
+                const style = document.createElement('style');
+                style.textContent = setup.css;
+                this.form.appendChild(style);
+            }
+
+            const body = document.createElement('div');
+            body.className = 'plugin-studio-plugin-setup';
+            body.innerHTML = setup.html;
+            this.form.appendChild(body);
+            return true;
+        }
+
+        async handlePluginOwnedChoice(event) {
+            const button = event.target.closest('[data-config-key][data-config-value]');
+            if (!button || !this.form.contains(button)) return;
+
+            const plugin = this.getSelectedPlugin();
+            const key = button.dataset.configKey;
+            const value = button.dataset.configValue;
+            if (!plugin || !key) return;
+
+            const field = Array.from(this.form.querySelectorAll('[data-key]'))
+                .find(input => input.dataset.key === key);
+            if (field) field.value = value;
+
+            const group = button.closest('[role="group"]') || button.parentElement;
+            group?.querySelectorAll('[data-config-key]').forEach((choice) => {
+                const active = choice === button;
+                choice.classList.toggle('is-active', active);
+                choice.setAttribute('aria-pressed', active ? 'true' : 'false');
+            });
+
+            const result = await window.electronAPI.plugins.setConfig(plugin.id, key, value);
+            if (!result?.success) {
+                this.setResult(result?.error || `Failed to save ${key}`);
+                return;
+            }
+            await this.loadSelectedDetail();
+            this.setResult('');
         }
 
         createFieldDescription(text) {
@@ -446,6 +516,24 @@
                 this.setResult({ success: true, pluginId: plugin.id });
             } finally {
                 this.setActionBusy(this.toggleBtn, false);
+            }
+        }
+
+        async toggleSelectedVisibility() {
+            const plugin = this.getSelectedPlugin();
+            if (!plugin) return;
+            this.setActionBusy(this.visibilityBtn, true);
+            try {
+                const nextVisible = plugin.visibleInSidebar === false;
+                const result = await window.electronAPI.plugins.setSidebarVisible(plugin.id, nextVisible);
+                if (!result?.success) {
+                    this.setResult(result?.error || 'Visibility toggle failed');
+                    return;
+                }
+                await this.loadPlugins(plugin.id);
+                this.setResult({ success: true, pluginId: plugin.id, visibleInSidebar: nextVisible });
+            } finally {
+                this.setActionBusy(this.visibilityBtn, false);
             }
         }
 

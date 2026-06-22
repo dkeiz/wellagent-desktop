@@ -4,8 +4,10 @@ const MAIN_WINDOW_OPTIONS = {
   width: 1400,
   height: 900,
   webPreferences: {
-    nodeIntegration: true,
-    contextIsolation: false
+    nodeIntegration: false,
+    contextIsolation: true,
+    sandbox: false,
+    preload: path.join(__dirname, '../renderer/electron-api.js')
   },
   titleBarStyle: 'default',
   show: false
@@ -15,8 +17,10 @@ const AUX_WINDOW_OPTIONS = {
   width: 1200,
   height: 800,
   webPreferences: {
-    nodeIntegration: true,
-    contextIsolation: false
+    nodeIntegration: false,
+    contextIsolation: true,
+    sandbox: false,
+    preload: path.join(__dirname, '../renderer/electron-api.js')
   },
   show: false
 };

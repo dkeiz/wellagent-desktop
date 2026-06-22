@@ -1,3 +1,6 @@
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const axios = require('axios');
 const {
   SPEC_FILE,
@@ -16,6 +19,8 @@ const {
   rememberTestedModel,
   saveActiveSelection
 } = require('../llm-state');
+const { getGenericSettingValue } = require('../settings-security');
+const { providerRequest } = require('../providers/provider-http');
 
 function registerLlmHandlers(ipcMain, runtime) {
   const {
@@ -23,6 +28,11 @@ function registerLlmHandlers(ipcMain, runtime) {
     aiService,
     promptFileManager
   } = runtime;
+
+  function broadcastCompanionLlmSettingsChange(reason = 'llm-settings') {
+    const companionServer = runtime.container?.optional?.('companionServer');
+    companionServer?.broadcastStateChanged?.('llm', { reason });
+  }
 
   async function syncResolvedRuntime(provider, model, runtimeConfig = null) {
     let resolvedRuntime = null;
@@ -42,6 +52,7 @@ function registerLlmHandlers(ipcMain, runtime) {
       await db.saveSetting('llm.thinkingMode', resolvedRuntime.reasoning?.enabled ? 'think' : 'off');
       await db.saveSetting('llm.showThinking', resolvedRuntime.reasoning?.visibility === 'hide' ? 'false' : 'true');
       await db.saveSetting('llm.thinkingVisibility', resolvedRuntime.reasoning?.visibility || 'show');
+      broadcastCompanionLlmSettingsChange('runtime-sync');
     }
 
     return resolvedRuntime;
@@ -103,6 +114,72 @@ function registerLlmHandlers(ipcMain, runtime) {
     return normalizeModelList(store[providerId]?.models || []);
   }
 
+  async function upsertDiscoveredModel(provider, model) {
+    const providerId = normalizeProviderId(provider);
+    const normalizedModel = String(model || '').trim();
+    if (!providerId || !normalizedModel) return;
+    const cached = await getCachedDiscoveredModels(providerId);
+    const merged = normalizeModelList([...cached, normalizedModel]);
+    await rememberDiscoveredModels(providerId, merged);
+  }
+
+  function shouldDisableFlashAttention(provider, model) {
+    const providerId = normalizeProviderId(provider);
+    const modelId = String(model || '').trim().toLowerCase();
+    if (providerId !== 'lmstudio' || !modelId) return false;
+
+    // Local LM Studio issue pattern: Qwen 3.5/3.6 30B+ A3B variants can fail with Flash Attention on some GPUs.
+    const qwenMatch = /qwen[\s\-_/]*3(\.5|\.6)?/.test(modelId);
+    const a3bMatch = /\ba3b\b/.test(modelId);
+    const largeFamilyMatch = /\b(30b|32b|35b|70b)\b/.test(modelId);
+    return qwenMatch && a3bMatch && largeFamilyMatch;
+  }
+
+  function withLmstudioLoadOverride(config = {}) {
+    const next = { ...(config || {}) };
+    const runtimeConfig = { ...(next.runtimeConfig || {}) };
+    const lmstudio = { ...(runtimeConfig.lmstudio || {}) };
+    const loadConfig = { ...(lmstudio.loadConfig || {}) };
+    // Required stable config for qwen/qwen3.6-35b-a3b based on known-good LM Studio run.
+    if (!Object.prototype.hasOwnProperty.call(loadConfig, 'flash_attention')) loadConfig.flash_attention = false;
+    if (!Object.prototype.hasOwnProperty.call(loadConfig, 'context_length')) loadConfig.context_length = 32768;
+    if (!Object.prototype.hasOwnProperty.call(loadConfig, 'eval_batch_size')) loadConfig.eval_batch_size = 256;
+    if (!Object.prototype.hasOwnProperty.call(loadConfig, 'num_experts')) loadConfig.num_experts = 8;
+    if (!Object.prototype.hasOwnProperty.call(loadConfig, 'offload_kv_cache_to_gpu')) loadConfig.offload_kv_cache_to_gpu = true;
+    lmstudio.loadConfig = loadConfig;
+    runtimeConfig.lmstudio = lmstudio;
+    if (!runtimeConfig.contextWindow?.value) {
+      runtimeConfig.contextWindow = { ...(runtimeConfig.contextWindow || {}), value: 32768 };
+    }
+    if (!runtimeConfig.reasoning || typeof runtimeConfig.reasoning !== 'object') {
+      runtimeConfig.reasoning = { enabled: false, visibility: 'show', effort: null, maxTokens: null };
+    } else if (runtimeConfig.reasoning.enabled === undefined || runtimeConfig.reasoning.enabled === null) {
+      runtimeConfig.reasoning = { ...runtimeConfig.reasoning, enabled: false };
+    }
+    next.runtimeConfig = runtimeConfig;
+    return next;
+  }
+
+  function mergeLmstudioLoadedConfigIntoRuntime(runtimeConfig = {}, loadedConfig = {}) {
+    const nextRuntime = { ...(runtimeConfig || {}) };
+    const lmstudio = { ...(nextRuntime.lmstudio || {}) };
+    const loadConfig = { ...(lmstudio.loadConfig || {}) };
+
+    if (Number.isFinite(Number(loadedConfig.context_length))) {
+      const contextLength = Number(loadedConfig.context_length);
+      loadConfig.context_length = contextLength;
+      nextRuntime.contextWindow = { ...(nextRuntime.contextWindow || {}), value: contextLength };
+    }
+    if (Number.isFinite(Number(loadedConfig.eval_batch_size))) loadConfig.eval_batch_size = Number(loadedConfig.eval_batch_size);
+    if (Number.isFinite(Number(loadedConfig.num_experts))) loadConfig.num_experts = Number(loadedConfig.num_experts);
+    if (typeof loadedConfig.flash_attention === 'boolean') loadConfig.flash_attention = loadedConfig.flash_attention;
+    if (typeof loadedConfig.offload_kv_cache_to_gpu === 'boolean') loadConfig.offload_kv_cache_to_gpu = loadedConfig.offload_kv_cache_to_gpu;
+
+    lmstudio.loadConfig = loadConfig;
+    nextRuntime.lmstudio = lmstudio;
+    return nextRuntime;
+  }
+
   async function getCatalogAwareModels(provider, discovered = []) {
     const providerId = normalizeProviderId(provider);
     const providerSpec = getProviderSpec(providerId);
@@ -119,6 +196,15 @@ function registerLlmHandlers(ipcMain, runtime) {
     }
 
     const cachedDiscovered = await getCachedDiscoveredModels(providerId);
+    // Ollama should reflect the real local/runtime setup only.
+    // Do not seed it with static catalog entries that may not exist on the endpoint.
+    if (providerId === 'ollama') {
+      return getKnownModelsForProvider(db, providerId, [
+        ...normalizedDiscovered,
+        ...cachedDiscovered
+      ]);
+    }
+
     const shouldUseCatalogFallback = providerId !== 'openrouter';
     const seededModels = [
       ...(shouldUseCatalogFallback ? getProviderCatalogModels(providerId) : []),
@@ -126,7 +212,13 @@ function registerLlmHandlers(ipcMain, runtime) {
       ...cachedDiscovered
     ];
 
-    const models = await getKnownModelsForProvider(db, providerId, seededModels);
+    let models = [];
+    try {
+      models = await getKnownModelsForProvider(db, providerId, seededModels);
+    } catch (error) {
+      console.error(`[LLM] Failed to merge known models for ${providerId}:`, error?.message || error);
+      return normalizeModelList(seededModels);
+    }
 
     // If discovery-capable provider has no models, still allow fallback catalog except OpenRouter
     // where stale static IDs are often misleading.
@@ -139,6 +231,7 @@ function registerLlmHandlers(ipcMain, runtime) {
 
   function normalizeConnectionPayload(config = {}) {
     const connection = { ...(config.connection || {}) };
+    const normalizeArgs = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
     if (config.apiKey !== undefined) {
       connection.apiKey = config.apiKey;
@@ -146,8 +239,213 @@ function registerLlmHandlers(ipcMain, runtime) {
     if (config.url !== undefined) {
       connection.url = config.url;
     }
+    if (connection.modelParams !== undefined) {
+      connection.modelParams = normalizeArgs(connection.modelParams);
+    }
+    if (connection.serverParams !== undefined) {
+      connection.serverParams = normalizeArgs(connection.serverParams);
+    }
 
     return connection;
+  }
+
+  function buildLmstudioEndpoint(baseUrl, endpointPath) {
+    const rawBase = String(baseUrl || '').trim() || 'http://localhost:1234';
+    const rawPath = String(endpointPath || '').trim();
+    const normalizedPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+    try {
+      const parsed = new URL(rawBase);
+      if (parsed.hostname === 'localhost') {
+        parsed.hostname = '127.0.0.1';
+      }
+      const pathname = (parsed.pathname || '/').replace(/\/+$/, '') || '/';
+      const hasV1 = pathname === '/v1' || pathname.endsWith('/v1');
+      const basePath = hasV1 ? pathname : `${pathname === '/' ? '' : pathname}/v1`;
+      parsed.pathname = `${basePath}${normalizedPath}`;
+      return parsed.toString();
+    } catch (_) {
+      const fallback = rawBase.replace(/\/+$/, '');
+      return `${fallback}/v1${normalizedPath}`;
+    }
+  }
+
+  async function getLmstudioApiKey() {
+    const stored = await db.getAPIKey?.('lmstudio');
+    if (stored) return stored;
+    const legacy = await db.getSetting('llm.lmstudio.apiKey');
+    if (legacy && db.setAPIKey) {
+      await db.setAPIKey('lmstudio', legacy);
+    }
+    return legacy;
+  }
+
+  async function discoverLmstudioModelsDirect() {
+    const urlSetting = await db.getSetting('llm.lmstudio.url');
+    const apiKey = await getLmstudioApiKey();
+    const endpoint = buildLmstudioEndpoint(urlSetting || 'http://localhost:1234', '/models');
+    const headers = {};
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
+    const response = await providerRequest(axios, {
+      method: 'get',
+      url: endpoint,
+      headers
+    }, { timeoutMs: 12000, label: 'LM Studio direct model discovery' });
+    const payload = response.data || {};
+    const rawModels = Array.isArray(payload?.data)
+      ? payload.data
+      : (Array.isArray(payload?.models) ? payload.models : []);
+    return normalizeModelList(rawModels.map(model => {
+      if (typeof model === 'string') return model;
+      return model?.id || model?.name || '';
+    }));
+  }
+
+  async function getLmstudioLoadedInstanceConfig(modelKey) {
+    const key = String(modelKey || '').trim().toLowerCase();
+    if (!key) return null;
+    const urlSetting = await db.getSetting('llm.lmstudio.url');
+    const apiKey = await getLmstudioApiKey();
+    const base = String(urlSetting || 'http://localhost:1234').trim() || 'http://localhost:1234';
+    let nativeEndpoint = '';
+    try {
+      const parsed = new URL(base);
+      if (parsed.hostname === 'localhost') parsed.hostname = '127.0.0.1';
+      const pathname = (parsed.pathname || '/').replace(/\/+$/, '') || '/';
+      const rootPath = pathname.endsWith('/v1') ? pathname.slice(0, -3) || '/' : pathname;
+      const trimmedRoot = rootPath.replace(/\/+$/, '');
+      parsed.pathname = `${trimmedRoot === '' || trimmedRoot === '/' ? '' : trimmedRoot}/api/v1/models`;
+      nativeEndpoint = parsed.toString();
+    } catch (_) {
+      nativeEndpoint = `${base.replace(/\/+$/, '')}/api/v1/models`;
+    }
+    const headers = {};
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    const response = await providerRequest(axios, {
+      method: 'get',
+      url: nativeEndpoint,
+      headers
+    }, { timeoutMs: 12000, label: 'LM Studio loaded model config' });
+    const models = Array.isArray(response?.data?.models) ? response.data.models : [];
+    const match = models.find(entry => String(entry?.key || '').trim().toLowerCase() === key);
+    const loaded = Array.isArray(match?.loaded_instances) ? match.loaded_instances : [];
+    if (loaded.length === 0) return null;
+    return loaded[0]?.config || null;
+  }
+
+  function buildLmstudioNativeModelsEndpoint(baseUrl) {
+    const base = String(baseUrl || 'http://localhost:1234').trim() || 'http://localhost:1234';
+    try {
+      const parsed = new URL(base);
+      if (parsed.hostname === 'localhost') parsed.hostname = '127.0.0.1';
+      const pathname = (parsed.pathname || '/').replace(/\/+$/, '') || '/';
+      const rootPath = pathname.endsWith('/v1') ? pathname.slice(0, -3) || '/' : pathname;
+      const trimmedRoot = rootPath.replace(/\/+$/, '');
+      parsed.pathname = `${trimmedRoot === '' || trimmedRoot === '/' ? '' : trimmedRoot}/api/v1/models`;
+      return parsed.toString();
+    } catch (_) {
+      return `${base.replace(/\/+$/, '')}/api/v1/models`;
+    }
+  }
+
+  async function enforceLmstudioLoadedConfig(model, runtimeConfig = {}) {
+    const modelId = String(model || '').trim();
+    if (!modelId) return null;
+
+    const urlSetting = await db.getSetting('llm.lmstudio.url');
+    const apiKey = await getLmstudioApiKey();
+    const nativeModelsEndpoint = buildLmstudioNativeModelsEndpoint(urlSetting || 'http://localhost:1234');
+    const nativeLoadEndpoint = nativeModelsEndpoint.replace(/\/models(\?.*)?$/i, '/models/load$1');
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+    const requested = runtimeConfig?.lmstudio?.loadConfig || {};
+    const desired = {};
+    if (typeof requested.flash_attention === 'boolean') desired.flash_attention = requested.flash_attention;
+    if (Number.isFinite(Number(requested.context_length))) desired.context_length = Number(requested.context_length);
+    if (Number.isFinite(Number(requested.eval_batch_size))) desired.eval_batch_size = Number(requested.eval_batch_size);
+    if (Number.isFinite(Number(requested.num_experts))) desired.num_experts = Number(requested.num_experts);
+    if (typeof requested.offload_kv_cache_to_gpu === 'boolean') desired.offload_kv_cache_to_gpu = requested.offload_kv_cache_to_gpu;
+    if (Object.keys(desired).length === 0) return null;
+
+    const modelsResponse = await providerRequest(axios, {
+      method: 'get',
+      url: nativeModelsEndpoint,
+      headers
+    }, { timeoutMs: 12000, label: 'LM Studio native model list' });
+    const models = Array.isArray(modelsResponse?.data?.models) ? modelsResponse.data.models : [];
+    const entry = models.find(item => String(item?.key || '').trim().toLowerCase() === modelId.toLowerCase());
+    const current = Array.isArray(entry?.loaded_instances) && entry.loaded_instances[0]?.config
+      ? entry.loaded_instances[0].config
+      : null;
+
+    const keys = Object.keys(desired);
+    const mismatch = !current || keys.some(key => current[key] !== desired[key]);
+    if (!mismatch) return current;
+
+    const attempts = [
+      { ...desired },
+      (() => {
+        const reduced = {};
+        if (typeof desired.flash_attention === 'boolean') reduced.flash_attention = desired.flash_attention;
+        if (Number.isFinite(Number(desired.context_length))) reduced.context_length = Number(desired.context_length);
+        return reduced;
+      })(),
+      (() => {
+        const minimal = {};
+        if (typeof desired.flash_attention === 'boolean') minimal.flash_attention = desired.flash_attention;
+        return minimal;
+      })()
+    ].filter(payload => Object.keys(payload).length > 0);
+
+    let lastError = null;
+    for (const attempt of attempts) {
+      try {
+        const loadPayload = { model: modelId, ...attempt, echo_load_config: true };
+        const loadResponse = await providerRequest(axios, {
+          method: 'post',
+          url: nativeLoadEndpoint,
+          data: loadPayload,
+          headers
+        }, { timeoutMs: 30000, label: 'LM Studio model load' });
+        return loadResponse?.data?.load_config || null;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    // Some LM Studio builds can keep prior runtime knobs while model is already loaded.
+    // Force a clean reload as a final fallback.
+    try {
+      const unloadEndpoint = nativeModelsEndpoint.replace(/\/models(\?.*)?$/i, '/models/unload$1');
+      await providerRequest(axios, {
+        method: 'post',
+        url: unloadEndpoint,
+        data: { model: modelId },
+        headers
+      }, { timeoutMs: 20000, label: 'LM Studio model unload' });
+      const fallbackAttempt = attempts[0] || {};
+      const loadPayload = { model: modelId, ...fallbackAttempt, echo_load_config: true };
+      const loadResponse = await providerRequest(axios, {
+        method: 'post',
+        url: nativeLoadEndpoint,
+        data: loadPayload,
+        headers
+      }, { timeoutMs: 45000, label: 'LM Studio model reload' });
+      return loadResponse?.data?.load_config || null;
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (lastError) {
+      const sourceError = lastError?.cause || lastError;
+      const detail = sourceError?.response?.data
+        ? ` ${JSON.stringify(sourceError.response.data).slice(0, 600)}`
+        : '';
+      throw new Error(`${sourceError.message}${detail}`);
+    }
+    return null;
   }
 
   ipcMain.handle('getProviderModels', async (event, provider) => {
@@ -175,81 +473,117 @@ function registerLlmHandlers(ipcMain, runtime) {
   });
 
   ipcMain.handle('llm:get-models', async (event, provider, forceRefresh = false) => {
-    console.log('llm:get-models called with provider:', provider, 'forceRefresh:', forceRefresh);
+    let discovered = [];
     try {
       const providerId = normalizeProviderId(provider);
-      const discovered = await aiService.getModels(providerId, forceRefresh);
+      discovered = await aiService.getModels(providerId, forceRefresh);
+      if (providerId === 'lmstudio') {
+        const direct = await discoverLmstudioModelsDirect();
+        if (direct.length > 0) {
+          await rememberDiscoveredModels(providerId, direct);
+          console.log(`[LMStudio] Using direct discovered model list (${direct.length})`);
+          return direct;
+        }
+      }
       const models = await getCatalogAwareModels(providerId, discovered);
-      console.log(`Models from ${provider}:`, models);
       return models;
     } catch (error) {
       console.error(`Failed to fetch models for ${provider}:`, error);
+      const fallback = normalizeModelList(discovered);
+      if (fallback.length > 0) {
+        console.warn(`[LLM] Returning discovered model fallback for ${provider}: ${fallback.length} model(s)`);
+        return fallback;
+      }
       return [];
     }
   });
 
   ipcMain.handle('llm:save-config', async (event, config) => {
     try {
-      console.log('Saving config:', config);
-      if (config.concurrencyEnabled !== undefined) {
-        await db.saveSetting('llm.concurrency.enabled', config.concurrencyEnabled ? 'true' : 'false');
-      }
-      await saveActiveSelection(db, config.provider, config.model);
-
-      const providerSpec = getProviderSpec(config.provider);
-      const connection = normalizeConnectionPayload(config);
-      if (providerSpec?.settings?.connectionFields?.length) {
-        await saveProviderConnectionConfig(db, config.provider, connection);
-      }
-      if (config.apiKey !== undefined && !providerSpec?.settings?.connectionFields?.some(field => field.id === 'apiKey')) {
-        if (config.apiKey) {
-          await db.setAPIKey(config.provider, config.apiKey);
+      let nextConfig = { ...(config || {}) };
+      if (normalizeProviderId(nextConfig.provider) === 'lmstudio' && nextConfig.model) {
+        try {
+          const loadedConfig = await getLmstudioLoadedInstanceConfig(nextConfig.model);
+          if (loadedConfig && typeof loadedConfig === 'object') {
+            nextConfig.runtimeConfig = mergeLmstudioLoadedConfigIntoRuntime(nextConfig.runtimeConfig || {}, loadedConfig);
+          }
+        } catch (error) {
+          console.warn(`[LMStudio] Could not import loaded model config for ${nextConfig.model}: ${error.message}`);
         }
       }
-      if (config.url !== undefined && !providerSpec?.settings?.connectionFields?.some(field => field.id === 'url')) {
-        await db.saveSetting(`llm.${config.provider}.url`, config.url);
+      if (shouldDisableFlashAttention(nextConfig.provider, nextConfig.model)) {
+        nextConfig = withLmstudioLoadOverride(nextConfig);
+      }
+      if (normalizeProviderId(nextConfig.provider) === 'lmstudio' && nextConfig.model) {
+        try {
+          const appliedConfig = await enforceLmstudioLoadedConfig(nextConfig.model, nextConfig.runtimeConfig || {});
+          if (appliedConfig && typeof appliedConfig === 'object') {
+            nextConfig.runtimeConfig = mergeLmstudioLoadedConfigIntoRuntime(nextConfig.runtimeConfig || {}, appliedConfig);
+          }
+        } catch (error) {
+          console.warn(`[LMStudio] Failed to enforce model load config for ${nextConfig.model}: ${error.message}`);
+        }
       }
 
-      if (config.provider === 'qwen') {
+      if (nextConfig.concurrencyEnabled !== undefined) {
+        await db.saveSetting('llm.concurrency.enabled', nextConfig.concurrencyEnabled ? 'true' : 'false');
+      }
+      await saveActiveSelection(db, nextConfig.provider, nextConfig.model);
+
+      const providerSpec = getProviderSpec(nextConfig.provider);
+      const connection = normalizeConnectionPayload(nextConfig);
+      if (providerSpec?.settings?.connectionFields?.length) {
+        await saveProviderConnectionConfig(db, nextConfig.provider, connection);
+      }
+      if (nextConfig.apiKey !== undefined && !providerSpec?.settings?.connectionFields?.some(field => field.id === 'apiKey')) {
+        if (nextConfig.apiKey) {
+          await db.setAPIKey(nextConfig.provider, nextConfig.apiKey);
+        }
+      }
+      if (nextConfig.url !== undefined && !providerSpec?.settings?.connectionFields?.some(field => field.id === 'url')) {
+        await db.saveSetting(`llm.${nextConfig.provider}.url`, nextConfig.url);
+      }
+
+      if (nextConfig.provider === 'qwen') {
         const existingMode = await db.getSetting('llm.qwen.mode');
         const existingUseOAuth = (await db.getSetting('llm.qwen.useOAuth')) === 'true';
-        const mode = config.mode || existingMode || 'cli';
-        const useOAuth = config.useOAuth !== undefined
-          ? config.useOAuth === true
+        const mode = nextConfig.mode || existingMode || 'cli';
+        const useOAuth = nextConfig.useOAuth !== undefined
+          ? nextConfig.useOAuth === true
           : (mode === 'oauth' || existingUseOAuth);
         await db.saveSetting('llm.qwen.mode', mode);
         await db.saveSetting('llm.qwen.useOAuth', useOAuth ? 'true' : 'false');
-      } else if (config.provider === 'openai') {
-        const transport = config.transport === 'api-key' ? 'api-key' : 'codex-cli';
+      } else if (nextConfig.provider === 'openai') {
+        const transport = nextConfig.transport === 'api-key' ? 'api-key' : 'codex-cli';
         await db.saveSetting('llm.openai.transport', transport);
-        if (config.codexSandbox) {
-          await db.saveSetting('llm.openai.codexSandbox', config.codexSandbox);
+        if (nextConfig.codexSandbox) {
+          await db.saveSetting('llm.openai.codexSandbox', nextConfig.codexSandbox);
         }
-        if (config.codexSearch !== undefined) {
-          await db.saveSetting('llm.openai.codexSearch', config.codexSearch ? 'true' : 'false');
+        if (nextConfig.codexSearch !== undefined) {
+          await db.saveSetting('llm.openai.codexSearch', nextConfig.codexSearch ? 'true' : 'false');
         }
-      } else if (config.useOAuth) {
-        await db.saveSetting(`llm.${config.provider}.useOAuth`, 'true');
+      } else if (nextConfig.useOAuth) {
+        await db.saveSetting(`llm.${nextConfig.provider}.useOAuth`, 'true');
       }
 
-      await aiService.setProvider(config.provider);
+      await aiService.setProvider(nextConfig.provider);
 
       let resolvedRuntime = null;
-      if (config.model) {
-        await rememberTestedModel(db, config.provider, config.model);
-        resolvedRuntime = await syncResolvedRuntime(config.provider, config.model, config.runtimeConfig || null);
+      if (nextConfig.model) {
+        await rememberTestedModel(db, nextConfig.provider, nextConfig.model);
+        await upsertDiscoveredModel(nextConfig.provider, nextConfig.model);
+        resolvedRuntime = await syncResolvedRuntime(nextConfig.provider, nextConfig.model, nextConfig.runtimeConfig || null);
       }
 
-      aiService.getModels(config.provider)
+      aiService.getModels(nextConfig.provider)
         .then(async models => {
-          await getCatalogAwareModels(config.provider, models);
-          console.log(`Refreshed ${models.length} models for ${config.provider}`);
+          await getCatalogAwareModels(nextConfig.provider, models);
+          console.log(`Refreshed ${models.length} models for ${nextConfig.provider}`);
         })
         .catch(err => {
-          console.error(`Background model refresh failed for ${config.provider}:`, err);
+          console.error(`Background model refresh failed for ${nextConfig.provider}:`, err);
         });
 
-      console.log('Config saved successfully');
       return { success: true, runtimeConfig: resolvedRuntime };
     } catch (error) {
       console.error('Failed to save LLM config:', error);
@@ -259,16 +593,16 @@ function registerLlmHandlers(ipcMain, runtime) {
 
   ipcMain.handle('llm:fetch-qwen-oauth', async () => {
     try {
-      const os = require('os');
-      const fs = require('fs');
-      const path = require('path');
-
       const oauthPath = path.join(os.homedir(), '.qwen', 'oauth_creds.json');
       if (fs.existsSync(oauthPath)) {
         const oauthData = fs.readFileSync(oauthPath, 'utf-8');
         const creds = JSON.parse(oauthData);
-        console.log('Qwen OAuth file structure:', Object.keys(creds));
-        await db.saveSetting('llm.qwen.oauthCreds', JSON.stringify(creds));
+        if (db.setCredential) {
+          await db.setCredential('llm.qwen.oauthCreds', JSON.stringify(creds));
+          await db.saveSetting('llm.qwen.oauthCreds', '');
+        } else {
+          await db.saveSetting('llm.qwen.oauthCreds', JSON.stringify(creds));
+        }
         await db.saveSetting('llm.qwen.useOAuth', 'true');
         return creds;
       }
@@ -409,6 +743,7 @@ function registerLlmHandlers(ipcMain, runtime) {
         { model, max_tokens: 10 }
       );
       await rememberTestedModel(db, provider, model);
+      await upsertDiscoveredModel(provider, model);
       await rememberLastWorkingModel(db, provider, model);
       await saveActiveSelection(db, provider, model);
       await aiService.setProvider(provider);
@@ -443,6 +778,7 @@ function registerLlmHandlers(ipcMain, runtime) {
       await db.saveSetting('llm.thinkingMode', mode);
     }
 
+    broadcastCompanionLlmSettingsChange('thinking-mode');
     return { success: true, mode };
   });
 
@@ -479,6 +815,7 @@ function registerLlmHandlers(ipcMain, runtime) {
     } else {
       await db.saveSetting('llm.showThinking', show ? 'true' : 'false');
     }
+    broadcastCompanionLlmSettingsChange('thinking-visibility');
     return { success: true };
   });
 
@@ -487,31 +824,33 @@ function registerLlmHandlers(ipcMain, runtime) {
       return { success: false, error: 'API key cannot be empty' };
     }
     try {
-      const response = await axios.get('https://dashscope.aliyuncs.com/api/v1/models', {
+      const response = await providerRequest(axios, {
+        method: 'get',
+        url: 'https://dashscope.aliyuncs.com/api/v1/models',
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      });
+        }
+      }, { timeoutMs: 10000, label: 'Qwen API key verification' });
       if (response.data && response.data.data && Array.isArray(response.data.data)) {
         return { success: true, modelCount: response.data.data.length };
       }
       return { success: false, error: 'Invalid API response format' };
     } catch (error) {
       let errorMessage = 'API key verification failed';
-      if (error.response) {
-        if (error.response.status === 401) {
+      const sourceError = error.cause || error;
+      if (sourceError.response) {
+        if (sourceError.response.status === 401) {
           errorMessage = 'Invalid API key: Unauthorized';
-        } else if (error.response.data && error.response.data.error) {
-          errorMessage = `API error: ${error.response.data.error.message || error.response.data.error}`;
+        } else if (sourceError.response.data && sourceError.response.data.error) {
+          errorMessage = `API error: ${sourceError.response.data.error.message || sourceError.response.data.error}`;
         } else {
-          errorMessage = `API returned status ${error.response.status}`;
+          errorMessage = `API returned status ${sourceError.response.status}`;
         }
-      } else if (error.request) {
+      } else if (sourceError.request) {
         errorMessage = 'No response from Qwen API server';
       } else {
-        errorMessage = `Request setup error: ${error.message}`;
+        errorMessage = `Request setup error: ${sourceError.message}`;
       }
       return { success: false, error: errorMessage };
     }
@@ -572,7 +911,7 @@ function registerLlmHandlers(ipcMain, runtime) {
 
   ipcMain.handle('get-setting-value', async (_, key) => {
     try {
-      return await db.getSetting(key);
+      return await getGenericSettingValue(db, key);
     } catch (error) {
       console.error(`Error getting setting ${key}:`, error);
       return null;

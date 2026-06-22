@@ -1,6 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
+const { stripToolPatterns } = require('./ipc/shared-utils');
+const { isPrivateSessionId } = require('./private-session-store');
+const { buildRuntimePaths } = require('./runtime-paths');
 
 /**
  * AgentLoop - Manages autonomous agent behaviors
@@ -24,13 +27,14 @@ class AgentLoop extends EventEmitter {
         this.sessions = new Map();
 
         // Template paths
-        const basePath = options.templateBasePath || path.join(__dirname, '../../agentin/prompts/templates');
+        const runtimePaths = options.runtimePaths || buildRuntimePaths(options);
+        const basePath = options.templateBasePath || runtimePaths.promptTemplatesDir;
         this.templates = {
             start: path.join(basePath, 'memory-start.md'),
             idle: path.join(basePath, 'memory-idle.md'),
             close: path.join(basePath, 'memory-close.md')
         };
-        this.userProfilePath = options.userProfilePath || path.join(__dirname, '../../agentin/userabout/memoryaboutuser.md');
+        this.userProfilePath = options.userProfilePath || runtimePaths.userProfilePath;
         this.taskQueueService = options.taskQueueService || null;
     }
 
@@ -217,6 +221,9 @@ class AgentLoop extends EventEmitter {
     // ==================== Trigger 3: Chat Close ====================
 
     async _enqueueCloseSummaryJob(sessionId) {
+        if (isPrivateSessionId(sessionId)) {
+            return;
+        }
         if (this.taskQueueService && typeof this.taskQueueService.createOrReuseTask === 'function') {
             try {
                 await this.taskQueueService.createOrReuseTask({
@@ -262,6 +269,10 @@ class AgentLoop extends EventEmitter {
      * Summarize and save memory when a chat closes
      */
     async onSessionClose(sessionId) {
+        if (isPrivateSessionId(sessionId)) {
+            this.removeSession(sessionId);
+            return;
+        }
         const session = this.sessions.get(sessionId);
         if (!session || session.memorySaved || session.messageCount < 4) {
             this.removeSession(sessionId);
@@ -309,8 +320,7 @@ class AgentLoop extends EventEmitter {
     }
 
     _stripToolCalls(text) {
-        // Remove TOOL:name{...} patterns
-        return text.replace(/TOOL:\w+\{[^}]*\}/g, '').trim();
+        return stripToolPatterns(text);
     }
 }
 

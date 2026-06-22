@@ -1,5 +1,5 @@
 const { EventEmitter } = require('events');
-const { WindowManager } = require('../../src/main/window-manager');
+const { WindowManager, createElectronWindowFactory } = require('../../src/main/window-manager');
 
 class FakeWindow extends EventEmitter {
   constructor(id) {
@@ -50,5 +50,26 @@ module.exports = {
     manager.send('tool-update', { ok: true });
     assert.equal(second.sent.length, 1, 'Expected the recreated window to receive new renderer events');
     assert.equal(first.sent.length, 1, 'Expected the old window not to receive new events');
+
+    let capturedOptions = null;
+    class FakeBrowserWindow extends FakeWindow {
+      constructor(options) {
+        super('captured');
+        capturedOptions = options;
+      }
+
+      loadFile(filePath) {
+        this.loadedFile = filePath;
+      }
+    }
+
+    const createWindow = createElectronWindowFactory({
+      BrowserWindow: FakeBrowserWindow,
+      rendererPath: 'renderer.html'
+    });
+    createWindow();
+    assert.equal(capturedOptions.webPreferences.nodeIntegration, false, 'Expected BrowserWindow to disable renderer Node integration');
+    assert.equal(capturedOptions.webPreferences.contextIsolation, true, 'Expected BrowserWindow to enable context isolation');
+    assert.ok(String(capturedOptions.webPreferences.preload || '').endsWith('electron-api.js'), 'Expected BrowserWindow to use the isolated preload bridge');
   }
 };

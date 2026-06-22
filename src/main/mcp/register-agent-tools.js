@@ -67,7 +67,13 @@ function normalizeSubagentParams(params = {}) {
       : 'queued',
     permissions_contract: params.permissions_contract && typeof params.permissions_contract === 'object'
       ? params.permissions_contract
-      : null
+      : null,
+    runtime_policy_profile: params.runtime_policy_profile || params.runtimePolicyProfile || params.policy_profile
+      ? String(params.runtime_policy_profile || params.runtimePolicyProfile || params.policy_profile).trim()
+      : '',
+    runtime_policy_grants: params.runtime_policy_grants && typeof params.runtime_policy_grants === 'object'
+      ? params.runtime_policy_grants
+      : (params.runtimePolicyGrants && typeof params.runtimePolicyGrants === 'object' ? params.runtimePolicyGrants : {})
   };
 }
 
@@ -222,7 +228,9 @@ async function runSubagent(server, params) {
       subagentMode,
       provider: params.provider || undefined,
       concurrencyMode: params.concurrency_mode || 'queued',
-      permissionsContract: params.permissions_contract || null
+      permissionsContract: params.permissions_contract || null,
+      runtimePolicyProfile: params.runtime_policy_profile || 'strict-subagent',
+      runtimePolicyGrants: params.runtime_policy_grants || {}
     }
   );
   const queuedRun = formatSubagentRun({
@@ -323,11 +331,14 @@ async function getSubagentStatus(server, params) {
 
 async function stopSubagent(server, params) {
   if (params.run_id) {
+    if (!server._agentManager || typeof server._agentManager.cancelSubagentRun !== 'function') {
+      throw new Error('Subagent run cancellation is unavailable');
+    }
+    const result = await server._agentManager.cancelSubagentRun(params.run_id, 'Stopped by subagent tool');
     return {
-      success: false,
+      ...result,
       action: 'stop',
-      run_id: params.run_id,
-      error: 'Scoped subagent run cancellation is not implemented yet'
+      run_id: params.run_id
     };
   }
 
@@ -365,6 +376,111 @@ async function handleSubagentOperation(server, rawParams = {}) {
     default:
       throw new Error(`Unsupported subagent action "${params.action}"`);
   }
+}
+
+function normalizeSetupSuperagentParams(params = {}) {
+  return {
+    action: String(params.action || 'inspect').trim().toLowerCase(),
+    setup_action: String(params.setup_action || params.setupAction || '').trim(),
+    action_id: String(params.action_id || params.actionId || '').trim(),
+    target: String(params.target || '').trim(),
+    preset: String(params.preset || params.presetName || '').trim(),
+    params: params.params && typeof params.params === 'object' && !Array.isArray(params.params)
+      ? params.params
+      : {},
+    max_recommendations: Number.isFinite(Number(params.max_recommendations))
+      ? Number(params.max_recommendations)
+      : 2,
+    include_dismissed: params.include_dismissed === true
+  };
+}
+
+async function handleSetupSuperagentOperation(server, rawParams = {}) {
+  const service = server._setupSuperagentService;
+  if (!service) {
+    throw new Error('Setup superagent service is unavailable');
+  }
+
+  const params = normalizeSetupSuperagentParams(rawParams);
+  if (params.action === 'inspect' || params.action === 'status') {
+    return {
+      success: true,
+      action: 'inspect',
+      assessment: await service.getAssessment({
+        maxRecommendations: params.max_recommendations,
+        includeDismissed: params.include_dismissed
+      })
+    };
+  }
+
+  if (params.action === 'run') {
+    if (!params.setup_action) {
+      throw new Error('setup_action is required when action="run"');
+    }
+    return service.runAction({
+      action: params.setup_action,
+      params: params.params
+    });
+  }
+
+  if (params.action === 'dismiss') {
+    if (!params.action_id) {
+      throw new Error('action_id is required when action="dismiss"');
+    }
+    const result = await service.dismissAction(params.action_id);
+    return {
+      success: result?.success !== false,
+      action: 'dismiss',
+      result,
+      assessment: await service.getAssessment({
+        maxRecommendations: params.max_recommendations,
+        includeDismissed: params.include_dismissed
+      })
+    };
+  }
+
+  if (params.action === 'toggle') {
+    if (!params.target) {
+      throw new Error('target is required when action="toggle", e.g. target="web" or target="companion"');
+    }
+    const result = await service.quickToggle(params.target);
+    return {
+      success: result?.success !== false,
+      action: 'toggle',
+      target: params.target,
+      result,
+      assessment: await service.getAssessment({
+        maxRecommendations: params.max_recommendations
+      })
+    };
+  }
+
+  if (params.action === 'apply_preset') {
+    if (!params.preset) {
+      throw new Error('preset is required when action="apply_preset", e.g. preset="developer"');
+    }
+    const result = await service.applyPreset(params.preset);
+    return {
+      success: result?.success !== false,
+      action: 'apply_preset',
+      result,
+      assessment: await service.getAssessment({
+        maxRecommendations: params.max_recommendations
+      })
+    };
+  }
+
+  if (params.action === 'check') {
+    const result = await service.quickCheck(params.target || 'all');
+    return {
+      success: result?.success !== false,
+      action: 'check',
+      target: params.target || 'all',
+      result: result?.result || null
+    };
+  }
+
+  throw new Error(`Unsupported setup_superagent action "${params.action}"`);
 }
 
 function registerAgentTools(server) {
@@ -427,6 +543,14 @@ function registerAgentTools(server) {
         permissions_contract: {
           type: 'object',
           description: 'Optional delegation permission contract: { safe_tools: string[], unsafe_tools: string[] }. Safe tools may be run-scoped granted; unsafe tools still require explicit user approval.'
+        },
+        runtime_policy_profile: {
+          type: 'string',
+          description: 'Runtime policy profile for the delegated run: strict, normal, or wide. Defaults to strict.'
+        },
+        runtime_policy_grants: {
+          type: 'object',
+          description: 'Optional run-scoped runtime policy grants, for example { actions: ["network.local"] }.'
         }
       },
       required: []
@@ -516,6 +640,54 @@ function registerAgentTools(server) {
       required: ['summary']
     }
   }, async (params) => normalizeCompletionPayload(params));
+
+  server.registerTool('setup_superagent', {
+    name: 'setup_superagent',
+    description: 'Inspect and improve the desktop setup state. Actions: inspect (review health), run (execute one setup action), dismiss (hide recommendation), toggle (quick flip a setting on/off), apply_preset (apply a named config profile like developer/research/power_user), check (focused health check of one subsystem).',
+    userDescription: 'Inspect current setup, apply presets, toggle settings, and apply safe setup changes',
+    example: 'TOOL:setup_superagent{"action":"inspect"}',
+    exampleOutput: '{"success":true,"action":"inspect","assessment":{"userMode":"partial","recommendedActions":[...]}}',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          description: 'Operation: inspect | run | dismiss | toggle | apply_preset | check',
+          default: 'inspect'
+        },
+        setup_action: {
+          type: 'string',
+          description: 'Safe setup action to execute when action="run", e.g. run_baseinit, set_capability_main, set_capability_group, set_files_mode, set_terminal_mode, plugin_quick_setup, enable_companion, or apply_preset.'
+        },
+        action_id: {
+          type: 'string',
+          description: 'Recommendation id to dismiss when action="dismiss".'
+        },
+        target: {
+          type: 'string',
+          description: 'For action="toggle": setting to flip (e.g. web, files, terminal, memory, companion, main, plugin:searxng). For action="check": subsystem to inspect (companion, llm, capabilities, plugins, or all).'
+        },
+        preset: {
+          type: 'string',
+          description: 'For action="apply_preset": preset name (chat_only, research, developer, power_user).'
+        },
+        params: {
+          type: 'object',
+          description: 'Action parameters for action="run".'
+        },
+        max_recommendations: {
+          type: 'number',
+          description: 'Maximum recommended actions to return during inspect.',
+          default: 2
+        },
+        include_dismissed: {
+          type: 'boolean',
+          description: 'When true, include previously dismissed recommendation ids in the assessment payload.',
+          default: false
+        }
+      }
+    }
+  }, async (params) => handleSetupSuperagentOperation(server, params));
 }
 
 module.exports = { registerAgentTools };

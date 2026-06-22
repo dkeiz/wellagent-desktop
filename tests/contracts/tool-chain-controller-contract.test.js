@@ -207,5 +207,121 @@ module.exports = {
       assert.equal(syntheticMessages.length, 1, 'Expected one synthetic tool-results message for failed tool');
       assert.includes(syntheticMessages[0].content, 'Error: upstream server unreachable', 'Expected error details to be forwarded to the model');
     }
+
+    {
+      const mcp = createServer();
+      let executeCount = 0;
+      const originalExecute = mcp.executeTool.bind(mcp);
+      mcp.executeTool = async (...args) => {
+        executeCount++;
+        return originalExecute(...args);
+      };
+      const dispatcher = {
+        async dispatch() {
+          return {
+            content: 'TOOL:demo_echo{"text":"should-not-run"}',
+            reasoning: 'stop-r1',
+            model: 'demo-model',
+            renderContext: { provider: 'ollama', model: 'demo-model' }
+          };
+        }
+      };
+
+      const chain = new ToolChainController(dispatcher, mcp, db);
+      chain.stopChain('subtask-run-1');
+      const result = await chain.executeWithChaining('hello', [], {
+        subagentRunId: 'subtask-run-1'
+      });
+      assert.equal(executeCount, 0, 'Expected scoped stop to prevent tool execution for the stopped run');
+      assert.equal(result.chain.steps, 0, 'Expected stopped scoped chain to exit before running a step');
+
+      const next = await chain.executeWithChaining('hello', [], {
+        subagentRunId: 'subtask-run-2',
+        maxChainSteps: 1
+      });
+      assert.equal(next.chain.steps, 1, 'Expected scoped stop not to affect another subagent run');
+    }
+
+    {
+      const mcp = createServer();
+      let turn = 0;
+      const dispatchOptions = [];
+      const runtimeConfig = { concurrency: { allowParallel: true }, reasoning: { enabled: false } };
+      const modelSpec = { capabilities: { concurrency: { supported: true } } };
+      const principal = { type: 'subagent', id: 'subagent:1:run', profile: 'strict-subagent' };
+      const toolContexts = [];
+      const originalExecute = mcp.executeTool.bind(mcp);
+      mcp.executeTool = async (toolName, params, toolCallId, options) => {
+        toolContexts.push(options.context);
+        return originalExecute(toolName, params, toolCallId, options);
+      };
+      const dispatcher = {
+        async dispatch(prompt, history, options) {
+          dispatchOptions.push(options);
+          turn++;
+          if (turn === 1) {
+            return {
+              content: 'TOOL:demo_echo{"text":"ok"}',
+              model: 'demo-model',
+              renderContext: { provider: 'openrouter', model: 'or-model' }
+            };
+          }
+          return {
+            content: 'done',
+            model: 'demo-model',
+            renderContext: { provider: 'openrouter', model: 'or-model' }
+          };
+        }
+      };
+
+      const chain = new ToolChainController(dispatcher, mcp, db);
+      await chain.executeWithChaining('hello', [], {
+        sessionId: 's-chain',
+        agentId: 42,
+        provider: 'openrouter',
+        model: 'anthropic/claude',
+        modelSpec,
+        runtimeConfig,
+        thinkingMode: 'off',
+        temperature: 0.2,
+        max_tokens: 123,
+        concurrencyMode: 'parallel',
+        runtimePolicyProfile: 'strict-subagent',
+        runtimePolicyGrants: { tools: ['demo_echo'] },
+        principal,
+        subagentRunId: 'run-chain',
+        includeTools: true,
+        includeRules: false,
+        includeEnv: false,
+        skipMemoryOnStart: true,
+        skipLock: true,
+        preemptible: false
+      });
+
+      assert.equal(dispatchOptions.length, 2, 'Expected dispatch options to be forwarded on every chain step');
+      for (const options of dispatchOptions) {
+        assert.equal(options.provider, 'openrouter', 'Expected provider override to pass through chaining');
+        assert.equal(options.model, 'anthropic/claude', 'Expected model override to pass through chaining');
+        assert.equal(options.modelSpec, modelSpec, 'Expected modelSpec to pass through chaining');
+        assert.equal(options.runtimeConfig, runtimeConfig, 'Expected runtimeConfig to pass through chaining');
+        assert.equal(options.thinkingMode, 'off', 'Expected thinkingMode to pass through chaining');
+        assert.equal(options.temperature, 0.2, 'Expected temperature to pass through chaining');
+        assert.equal(options.max_tokens, 123, 'Expected max_tokens to pass through chaining');
+        assert.equal(options.concurrencyMode, 'parallel', 'Expected concurrencyMode to pass through chaining');
+        assert.equal(options.runtimePolicyProfile, 'strict-subagent', 'Expected runtime policy profile to pass through chaining');
+        assert.deepEqual(options.runtimePolicyGrants, { tools: ['demo_echo'] }, 'Expected runtime policy grants to pass through chaining');
+        assert.equal(options.principal, principal, 'Expected principal to pass through chaining');
+        assert.equal(options.subagentRunId, 'run-chain', 'Expected subagentRunId to pass through chaining');
+        assert.equal(options.includeTools, true, 'Expected includeTools flag to pass through chaining');
+        assert.equal(options.includeRules, false, 'Expected includeRules flag to pass through chaining');
+        assert.equal(options.includeEnv, false, 'Expected includeEnv flag to pass through chaining');
+        assert.equal(options.skipMemoryOnStart, true, 'Expected skipMemoryOnStart flag to pass through chaining');
+        assert.equal(options.skipLock, true, 'Expected skipLock flag to pass through chaining');
+        assert.equal(options.preemptible, false, 'Expected preemptible flag to pass through chaining');
+      }
+      assert.equal(toolContexts[0].principal, principal, 'Expected chained tool execution to retain principal');
+      assert.equal(toolContexts[0].runtimePolicyProfile, 'strict-subagent', 'Expected chained tool execution to retain runtime policy profile');
+      assert.deepEqual(toolContexts[0].runtimePolicyGrants, { tools: ['demo_echo'] }, 'Expected chained tool execution to retain runtime policy grants');
+    }
   }
 };

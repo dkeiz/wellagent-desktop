@@ -142,6 +142,11 @@ function buildContainer(publishedEvents) {
     agentMemory: { append: async () => ({}), read: async () => ({}), list: async () => [], getStats: () => ({}), saveImage: async () => ({}) },
     promptFileManager: { syncToFiles: async () => {}, getPaths: () => ({}), syncFromFiles: async () => {}, loadSystemPrompt: async () => 'x', saveSystemPrompt: async () => {}, loadRulesFromFiles: async () => [] },
     agentLoop: { onSessionClose: async () => {}, recordActivity() {}, loadMemoryContext: async () => null, getSession: () => ({ autoMemory: false, idleSeconds: 0 }) },
+    sessionWorkspace: {
+      getWorkspacePath: () => '',
+      listFiles: () => [],
+      searchFiles: () => []
+    },
     connectorRuntime: { listConnectors: async () => [], startConnector: async () => ({}), stopConnector: async () => ({}), getLogs: () => [] },
     dispatcher: {
       async dispatch(prompt) {

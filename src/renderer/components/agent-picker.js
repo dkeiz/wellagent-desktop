@@ -44,7 +44,12 @@ class AgentPickerWidget {
         };
 
         if (header) {
-            header.addEventListener('click', () => {
+            header.addEventListener('click', (event) => {
+                if (event.target.closest('.collapse-arrow')) {
+                    const collapsed = widget.classList.toggle('collapsed');
+                    window.LocalAgentLayoutMode?.setSidebarSectionCollapsed?.('subagents', collapsed);
+                    return;
+                }
                 openManager();
             });
         }
@@ -60,7 +65,13 @@ class AgentPickerWidget {
     bindSuperagentManagerOpen() {
         const header = document.getElementById('toggle-superagents-widget');
         if (!header) return;
-        header.addEventListener('click', async () => {
+        header.addEventListener('click', async (event) => {
+            if (event.target.closest('.collapse-arrow')) {
+                const widget = header.closest('.sidebar-agent-block');
+                const collapsed = Boolean(widget?.classList.toggle('collapsed'));
+                window.LocalAgentLayoutMode?.setSidebarSectionCollapsed?.('agents', collapsed);
+                return;
+            }
             if (!window.app?.mainPanel?.openSuperagentManagerTab) return;
             await window.app.mainPanel.openSuperagentManagerTab();
         });
@@ -81,8 +92,11 @@ class AgentPickerWidget {
         if (proContainer) proContainer.innerHTML = '';
         if (subContainer) subContainer.innerHTML = '';
 
-        const proAgents = this.agents.filter(a => a.type === 'pro');
-        const subAgents = this.agents.filter(a => a.type === 'sub');
+        const isShown = (agent) => agent.visibleInSidebar !== false && agent.visible_in_sidebar !== 0;
+        const allProAgents = this.agents.filter(a => a.type === 'pro');
+        const allSubAgents = this.agents.filter(a => a.type === 'sub');
+        const proAgents = allProAgents.filter(isShown);
+        const subAgents = allSubAgents.filter(isShown);
 
         if (proContainer && proAgents.length > 0) {
             const proGrid = document.createElement('div');
@@ -92,7 +106,7 @@ class AgentPickerWidget {
             });
             proContainer.appendChild(proGrid);
         } else if (proContainer) {
-            proContainer.innerHTML = '<p class="no-agents">No pro agents configured</p>';
+            proContainer.innerHTML = `<p class="no-agents">${allProAgents.length > 0 ? 'No pro agents shown' : 'No pro agents configured'}</p>`;
         }
 
         if (subContainer && subAgents.length > 0) {
@@ -103,7 +117,7 @@ class AgentPickerWidget {
             });
             subContainer.appendChild(subGrid);
         } else if (subContainer) {
-            subContainer.innerHTML = '<p class="no-agents">No sub-agents configured</p>';
+            subContainer.innerHTML = `<p class="no-agents">${allSubAgents.length > 0 ? 'No sub-agents shown' : 'No sub-agents configured'}</p>`;
         }
     }
 
@@ -289,17 +303,20 @@ class AgentPickerWidget {
         if (!host) return;
 
         try {
-            const [profileResult, tools] = await Promise.all([
+            const [profileResult, visibleTools, inventoryTools] = await Promise.all([
                 window.electronAPI.permissions.getAgentProfile(agentId),
-                window.electronAPI.getMCPTools()
+                window.electronAPI.getMCPTools({ agentId }),
+                window.electronAPI.getMCPToolInventory()
             ]);
             const profile = profileResult?.profile || {};
             const toolStates = profileResult?.toolStates || {};
+            const activePresetId = String(profileResult?.activePresetId || profile.preset_id || '').trim();
+            const visibleToolNames = new Set(visibleTools.filter(tool => tool?.name).map(tool => tool.name));
+            const otherTools = inventoryTools.filter(tool => tool?.name && !visibleToolNames.has(tool.name));
             const groupFields = [
                 ['main', 'main_enabled', 'Main Switch'],
                 ['unsafe', 'unsafe_enabled', 'Unsafe'],
                 ['web', 'web_enabled', 'Web'],
-                ['terminal', 'terminal_enabled', 'Terminal'],
                 ['ports', 'ports_enabled', 'Ports'],
                 ['visual', 'visual_enabled', 'Visual']
             ];
@@ -311,19 +328,37 @@ class AgentPickerWidget {
                 </label>
             `).join('');
 
-            const toolsHtml = tools
+            const renderToolToggle = (tool) => {
+                const checked = toolStates[tool.name] === true;
+                return `<label style="display:block;font-size:0.85rem;">
+                    <input type="checkbox" data-agent-tool="${tool.name}" ${checked ? 'checked' : ''}>
+                    <span>${tool.name}</span>
+                </label>`;
+            };
+            const visibleToolsHtml = visibleTools
                 .filter(tool => tool?.name)
                 .sort((a, b) => a.name.localeCompare(b.name))
-                .map(tool => {
-                    const checked = toolStates[tool.name] === true;
-                    return `<label style="display:block;font-size:0.85rem;">
-                        <input type="checkbox" data-agent-tool="${tool.name}" ${checked ? 'checked' : ''}>
-                        <span>${tool.name}</span>
-                    </label>`;
-                })
+                .map(renderToolToggle)
+                .join('');
+            const otherToolsHtml = otherTools
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map(renderToolToggle)
                 .join('');
 
             host.innerHTML = `
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.7rem;padding:0.55rem 0.7rem;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-secondary);">
+                    <div>
+                        <div style="font-size:0.82rem;font-weight:600;">Permission Preset</div>
+                        <div style="font-size:0.8rem;opacity:0.82;">
+                            ${activePresetId === 'developer'
+                                ? 'Developer preset active. Manual permission edits will exit preset mode.'
+                                : 'Uses global defaults unless you enable a preset or change permissions here.'}
+                        </div>
+                    </div>
+                    <button type="button" class="secondary-btn" id="toggle-developer-agent-profile-btn">
+                        ${activePresetId === 'developer' ? 'Disable Developer Profile' : 'Enable Developer Profile'}
+                    </button>
+                </div>
                 <div style="margin-bottom:0.6rem;">
                     ${groupsHtml}
                 </div>
@@ -334,17 +369,42 @@ class AgentPickerWidget {
                         <option value="read" ${profile.files_mode === 'read' ? 'selected' : ''}>read</option>
                         <option value="full" ${profile.files_mode === 'full' ? 'selected' : ''}>full</option>
                     </select>
+                </label>
+                <label style="display:block;margin-bottom:0.6rem;">
+                    Terminal Mode:
+                    <select data-agent-group="terminal" style="margin-left:0.4rem;">
+                        <option value="off" ${profile.terminal_mode === 'off' ? 'selected' : ''}>off</option>
+                        <option value="workspace" ${profile.terminal_mode !== 'off' && profile.terminal_mode !== 'system' ? 'selected' : ''}>workspace</option>
+                        <option value="system" ${profile.terminal_mode === 'system' ? 'selected' : ''}>system</option>
+                    </select>
                     <button type="button" class="secondary-btn" id="reset-agent-permissions-btn" style="margin-left:0.5rem;">Reset To Global</button>
                 </label>
-                <details>
-                    <summary>Per-tool overrides</summary>
+                <details open>
+                    <summary>Visible by default (${visibleTools.length})</summary>
                     <div style="max-height:180px;overflow:auto;border:1px solid var(--border-color);padding:0.4rem;margin-top:0.4rem;">
-                        ${toolsHtml}
+                        ${visibleToolsHtml || '<div style="font-size:0.82rem;opacity:0.8;">No tools are visible by default for this agent.</div>'}
+                    </div>
+                </details>
+                <details style="margin-top:0.6rem;">
+                    <summary>Other registered tools (${otherTools.length})</summary>
+                    <div style="max-height:180px;overflow:auto;border:1px solid var(--border-color);padding:0.4rem;margin-top:0.4rem;">
+                        ${otherToolsHtml || '<div style="font-size:0.82rem;opacity:0.8;">No additional registered tools.</div>'}
                     </div>
                 </details>
             `;
 
             const resetBtn = modal.querySelector('#reset-agent-permissions-btn');
+            const toggleDeveloperBtn = modal.querySelector('#toggle-developer-agent-profile-btn');
+            if (toggleDeveloperBtn) {
+                toggleDeveloperBtn.addEventListener('click', async () => {
+                    if (activePresetId === 'developer') {
+                        await window.electronAPI.permissions.resetAgentProfile(agentId);
+                    } else {
+                        await window.electronAPI.permissions.applyAgentPreset(agentId, 'developer');
+                    }
+                    await this.renderAgentPermissionEditor(modal, agentId);
+                });
+            }
             if (resetBtn) {
                 resetBtn.addEventListener('click', async () => {
                     await window.electronAPI.permissions.resetAgentProfile(agentId);
@@ -370,6 +430,11 @@ class AgentPickerWidget {
         const filesSelect = host.querySelector('select[data-agent-group="files"]');
         if (filesSelect) {
             await window.electronAPI.permissions.setAgentGroup(agentId, 'files', filesSelect.value);
+        }
+
+        const terminalSelect = host.querySelector('select[data-agent-group="terminal"]');
+        if (terminalSelect) {
+            await window.electronAPI.permissions.setAgentGroup(agentId, 'terminal', terminalSelect.value);
         }
 
         const toolToggles = host.querySelectorAll('input[data-agent-tool]');

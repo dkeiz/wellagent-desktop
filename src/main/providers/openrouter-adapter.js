@@ -1,5 +1,9 @@
 const axios = require('axios');
 const BaseAdapter = require('./base-adapter');
+const { isProviderRequestCanceled, providerRequest } = require('./provider-http');
+
+const REQUEST_TIMEOUT_MS = 120000;
+const MODEL_LIST_TIMEOUT_MS = 15000;
 
 /**
  * OpenRouterAdapter — OpenRouter API (OpenAI-compatible).
@@ -14,7 +18,7 @@ class OpenRouterAdapter extends BaseAdapter {
     }
 
     async call(messages, options = {}) {
-        const signal = this._startRequest();
+        const { requestId, signal } = this._startRequest();
         const headers = await this._getHeaders();
         const runtimeConfig = options.runtimeConfig || {};
         const reasoningConfig = runtimeConfig.reasoning || {};
@@ -27,9 +31,15 @@ class OpenRouterAdapter extends BaseAdapter {
             model: options.model || 'openrouter/auto',
             messages: processedMessages,
             temperature: options.temperature || 0.7,
-            max_tokens: options.max_tokens || 1000,
             stream: false
         };
+        // CRITICAL WARNING: DO NOT hardcode a default max_tokens (like 1000) here or anywhere in this adapter!
+        // Capping output tokens by default restricts the model output length and truncates responses.
+        // Let the API provider / model config decide output limits by default unless options.max_tokens is explicitly provided.
+        if (options.max_tokens != null) {
+            requestBody.max_tokens = options.max_tokens;
+        }
+        this._applyPromptCacheHint(requestBody, options.promptCache);
 
         if (reasoningCaps.parameterMode === 'openrouter_reasoning' && reasoningCaps.supported) {
             requestBody.reasoning = {
@@ -53,12 +63,15 @@ class OpenRouterAdapter extends BaseAdapter {
         }
 
         try {
-            const response = await axios.post(`${this.baseURL}/chat/completions`, requestBody, {
+            const response = await providerRequest(axios, {
+                method: 'post',
+                url: `${this.baseURL}/chat/completions`,
+                data: requestBody,
                 signal,
                 headers
-            });
+            }, { timeoutMs: REQUEST_TIMEOUT_MS, label: 'OpenRouter generation' });
 
-            this._endRequest();
+            this._endRequest(requestId);
 
             const message = response.data.choices?.[0]?.message || {};
             const reasoning = this._extractReasoning(message, response.data);
@@ -70,9 +83,9 @@ class OpenRouterAdapter extends BaseAdapter {
                 usage: response.data.usage
             });
         } catch (error) {
-            this._endRequest();
+            this._endRequest(requestId);
 
-            if (axios.isCancel(error) || error.name === 'AbortError' || error.code === 'ERR_CANCELED') {
+            if (isProviderRequestCanceled(axios, error)) {
                 return this._normalizeResponse({
                     content: '[Generation stopped by user]',
                     model: options.model,
@@ -86,12 +99,80 @@ class OpenRouterAdapter extends BaseAdapter {
     async getModels() {
         try {
             const headers = await this._getHeaders();
-            const response = await axios.get(`${this.baseURL}/models`, { headers });
+            const response = await providerRequest(axios, {
+                method: 'get',
+                url: `${this.baseURL}/models`,
+                headers
+            }, { timeoutMs: MODEL_LIST_TIMEOUT_MS, label: 'OpenRouter model list' });
             return response.data.data.map(m => m.id);
         } catch (error) {
             console.error('[OpenRouter] Failed to fetch models:', error.message);
             return [];
         }
+    }
+
+    _applyPromptCacheHint(requestBody, promptCache = null) {
+        if (!promptCache?.enabled) return;
+        const key = String(promptCache.key || '').trim();
+        if (!key) return;
+
+        // OpenRouter session_id keeps multi-turn requests on a sticky provider
+        // cache path. Anthropic prompt-cache breakpoints are content-block
+        // annotations below, not top-level request fields.
+        requestBody.session_id = key.slice(0, 256);
+
+        const model = String(requestBody.model || '').toLowerCase();
+        if (model.startsWith('anthropic/') || model.startsWith('~anthropic/')) {
+            const cacheControl = { type: 'ephemeral' };
+            if (promptCache.retention === '1h') {
+                cacheControl.ttl = '1h';
+            }
+
+            const messages = requestBody.messages;
+            if (Array.isArray(messages) && messages.length > 0) {
+                if (messages[0]?.role === 'system') {
+                    messages[0] = this._withAnthropicCacheBreakpoint(messages[0], cacheControl);
+                }
+
+                for (let i = messages.length - 1; i >= 0; i--) {
+                    if (messages[i]?.role === 'user') {
+                        messages[i] = this._withAnthropicCacheBreakpoint(messages[i], cacheControl);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    _withAnthropicCacheBreakpoint(message, cacheControl) {
+        return {
+            ...message,
+            content: this._contentWithCacheControl(message?.content, cacheControl)
+        };
+    }
+
+    _contentWithCacheControl(content, cacheControl) {
+        const cache = { ...cacheControl };
+        if (typeof content === 'string') {
+            return [{ type: 'text', text: content, cache_control: cache }];
+        }
+        if (Array.isArray(content)) {
+            const blocks = content.map(part => {
+                if (part && typeof part === 'object') return { ...part };
+                return { type: 'text', text: String(part ?? '') };
+            });
+            for (let index = blocks.length - 1; index >= 0; index -= 1) {
+                if (blocks[index] && typeof blocks[index] === 'object') {
+                    blocks[index] = { ...blocks[index], cache_control: cache };
+                    return blocks;
+                }
+            }
+            return [{ type: 'text', text: '', cache_control: cache }];
+        }
+        if (content && typeof content === 'object') {
+            return [{ ...content, cache_control: cache }];
+        }
+        return [{ type: 'text', text: String(content ?? ''), cache_control: cache }];
     }
 
     async _getHeaders() {

@@ -90,8 +90,14 @@ module.exports = {
     assert.equal(elements['run-skin-autotest-btn'].hidden, false, 'Expected explicit skin dev tools toggle to reveal auto test control');
 
     localStorage.removeItem('skinDevTools');
-    context.process.argv = ['electron', 'app', '--test'];
+    context.process.argv = ['electron', 'app', '--skintest'];
     manager.syncDevControlsVisibility();
     assert.equal(elements['run-skin-autotest-btn'].hidden, false, 'Expected test mode to reveal auto test control');
+
+    manager.state.enabled = true;
+    manager.state.loading = true;
+    manager.state.pendingApply = false;
+    await manager.onThemeChanged();
+    assert.equal(manager.state.pendingApply, true, 'Expected theme observer changes to queue a pending apply during active skin load');
   }
 };

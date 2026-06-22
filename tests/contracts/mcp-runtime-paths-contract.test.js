@@ -17,6 +17,10 @@ function createCapabilityManager() {
   };
 }
 
+function portablePath(filePath) {
+  return String(filePath).replace(/\\/g, '/');
+}
+
 module.exports = {
   name: 'mcp-runtime-paths-contract',
   tags: ['contract', 'fast'],
@@ -70,7 +74,7 @@ module.exports = {
       const promptResult = await server.executeTool('modify_system_prompt', {
         content: 'Temp runtime prompt'
       });
-      assert.equal(promptResult.result.path, promptPath, 'Expected prompt tool to write into the injected runtime prompt path');
+      assert.equal(promptResult.result.path, portablePath(promptPath), 'Expected prompt tool to write into the injected runtime prompt path');
       assert.equal(fs.readFileSync(promptPath, 'utf-8'), 'Temp runtime prompt', 'Expected prompt tool to update the injected prompt file');
       assert.equal(settings.get('system_prompt'), 'Temp runtime prompt', 'Expected prompt tool to persist DB state');
 
@@ -80,7 +84,7 @@ module.exports = {
         code: 'module.exports = { name: "temp-connector" };'
       });
       const connectorPath = path.join(connectorsDir, 'temp-connector.js');
-      assert.equal(connectorResult.result.path, connectorPath, 'Expected connector tool to write into the injected runtime connector path');
+      assert.equal(connectorResult.result.path, portablePath(connectorPath), 'Expected connector tool to write into the injected runtime connector path');
       assert.ok(fs.existsSync(connectorPath), 'Expected connector tool to create the connector file');
     } finally {
       fs.rmSync(tempBase, { recursive: true, force: true });

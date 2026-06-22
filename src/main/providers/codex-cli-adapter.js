@@ -16,11 +16,11 @@ const DEFAULT_MODELS = [
 class CodexCliAdapter extends BaseAdapter {
     constructor(db) {
         super('codex-cli', db);
-        this.child = null;
+        this.children = new Map();
     }
 
     async call(messages, options = {}) {
-        const signal = this._startRequest();
+        const { requestId, signal } = this._startRequest();
         const prompt = this._formatPrompt(messages);
         const model = options.model || await this.db.getSetting('llm.openai.codexModel') || DEFAULT_MODELS[0];
         const cwd = await this._getWorkingDirectory();
@@ -52,12 +52,13 @@ class CodexCliAdapter extends BaseAdapter {
                 env: { ...process.env, NO_COLOR: '1' }
             });
 
-            this.child = child;
+            this.children.set(requestId, child);
             const timer = setTimeout(() => {
                 if (settled) return;
                 child.kill();
                 settled = true;
-                this._endRequest();
+                this.children.delete(requestId);
+                this._endRequest(requestId);
                 reject(new Error(`Codex CLI timed out after ${timeoutMs}ms`));
             }, timeoutMs);
 
@@ -66,7 +67,8 @@ class CodexCliAdapter extends BaseAdapter {
                 child.kill();
                 settled = true;
                 clearTimeout(timer);
-                this._endRequest();
+                this.children.delete(requestId);
+                this._endRequest(requestId);
                 resolve(this._normalizeResponse({
                     content: '[Generation stopped by user]',
                     model,
@@ -84,14 +86,16 @@ class CodexCliAdapter extends BaseAdapter {
                 if (settled) return;
                 settled = true;
                 clearTimeout(timer);
-                this._endRequest();
+                this.children.delete(requestId);
+                this._endRequest(requestId);
                 reject(new Error(`Codex CLI failed to start: ${error.message}`));
             });
             child.on('close', code => {
                 if (settled) return;
                 settled = true;
                 clearTimeout(timer);
-                this._endRequest();
+                this.children.delete(requestId);
+                this._endRequest(requestId);
                 if (code !== 0) {
                     return reject(new Error(`Codex CLI exited with code ${code}: ${stderr || stdout}`.trim()));
                 }
@@ -107,12 +111,24 @@ class CodexCliAdapter extends BaseAdapter {
         return DEFAULT_MODELS;
     }
 
-    stop() {
-        if (this.child) {
-            this.child.kill();
-            this.child = null;
+    stop(requestId = null) {
+        const id = requestId ? String(requestId) : '';
+        let stoppedChild = false;
+        if (id) {
+            const child = this.children.get(id);
+            if (child) {
+                child.kill();
+                this.children.delete(id);
+                stoppedChild = true;
+            }
+        } else {
+            stoppedChild = this.children.size > 0;
+            for (const child of this.children.values()) {
+                child.kill();
+            }
+            this.children.clear();
         }
-        return super.stop();
+        return super.stop(requestId) || stoppedChild;
     }
 
     async getStatus() {
@@ -158,7 +174,8 @@ class CodexCliAdapter extends BaseAdapter {
 
     async _getWorkingDirectory() {
         const configured = await this.db.getSetting('llm.openai.codexCwd');
-        return configured || path.resolve(process.cwd());
+        const executionRoot = await this.db.getSetting('execution.rootPath');
+        return configured || executionRoot || path.resolve(process.cwd());
     }
 
     _formatPrompt(messages = []) {

@@ -1,0 +1,487 @@
+LocalAgent current code review and project review
+Date: 2026-05-22
+
+Scope
+- Code-first review of the current repository shape, main-process/runtime code, renderer bridge, companion server, mobile companion changes, plugin/runtime surfaces, and project hygiene.
+- This file replaces the previous review queue. Previous tasks that are now covered were removed; still-live items were updated with current evidence.
+- Testing is targeted, not blocking. This review file records the focused syntax and contract checks that were run for each follow-up batch.
+- Final status: this review log is now closed after the companion bearer-token lifecycle work. Treat this file as historical/obsolete; the next review should start from scratch instead of continuing this queue.
+
+Executive summary
+- The highest-risk issues are now narrower boundary failures: the breadth of the renderer bridge API, remaining silent/state-changing failure paths, and file-like runtime surfaces that still need to converge on the central policy model.
+- The previous packaged-app data-path work is largely in place, default/plugin reconciliation is improved, and runtime-path drift is now guarded by a contract for production `agentin` fallback constructors.
+- The architecture direction is now explicit: one central enforcement service with different policy profiles per principal, not one global sandbox for every subsystem.
+- The repo is close to the 1000-line file cap in several important modules. One tracked source/data file is over the cap by allowlist, and a generated mobile lockfile is far over it.
+- Several bugs are small in code size but high in impact, especially raw renderer IPC regressions and state-changing warning-only catches. No active queue remains in this file after closure.
+
+Previous Review Status
+- Covered and removed from the active queue: packaged-app mutable-state path work, packaged database path migration, database migration runner wiring, Qwen CLI shell-string spawn fix, artifact schema version work, and the first line-budget split pass.
+- Still open, updated below: runtime path centralization, bundled default/plugin reconciliation, state ownership, central path policy, near-limit files, silent catches, and weak test fake contracts.
+- New or newly elevated: Electron privilege boundary, unsafe "safe" tools, session-id path traversal, companion permission bypasses, mobile WebView/native bridge origin handling, and plaintext secret storage.
+
+Completed In Follow-Up
+- Fixed `src/main/workflow-manager.js` so malformed workflow files log the actual file name instead of throwing a catch-path `ReferenceError`.
+- Fixed `src/main/companion/companion-server-core.js` so JSON request parsing uses the existing bounded `readBody` helper and respects `MAX_BODY_BYTES`.
+- Fixed `src/main/a2a-http-server.js` so A2A JSON RPC request parsing has a 10 MiB body limit.
+- Hardened `src/main/mcp/register-web-system-tools.js` so `fetch_url` only accepts HTTP(S), has a 15 second timeout, has a 2 MiB response cap, and stores only the bounded response.
+- Added explicit axios timeouts to OpenAI-compatible, OpenRouter, LM Studio, and Ollama provider generation/model-list calls.
+- Reworked `src/renderer/electron-api.js` so `window.electronAPI` no longer exposes the raw `ipcRenderer` object, raw debug invoke is hidden unless `LOCALAGENT_RENDERER_DEBUG=1`, and renderer raw `invoke` call sites now use named wrappers.
+- Removed the direct renderer `require('electron')` usage from `src/renderer/components/plugin-panel.js`.
+- Changed `execute-mcp-tool-once` so it follows normal tool permission handling instead of calling MCP tools with `bypassPermissions: true`.
+- Deferred renderer Settings/Companion/A2A initialization in `src/renderer/app.js` until the Settings tab is opened, avoiding companion status/device/pairing IPC preloads during normal chat startup.
+- Changed stored companion HTTP server startup in `src/main/bootstrap.js` to run in the background after bootstrap instead of being awaited on the startup path; shutdown now cancels or waits for any in-flight companion startup.
+- Added session workspace ID validation and path containment in `src/main/session-workspace.js`, plus `tests/contracts/session-workspace-contract.test.js` for traversal attempts.
+- Replaced the `calculate` tool's dynamic `Function(...)` evaluator in `src/main/mcp/register-prompt-tools.js` with a bounded arithmetic parser and added `tests/contracts/calculate-tool-safety-contract.test.js`.
+- Replaced remaining generic `window.electronAPI.on(channel, ...)` usage with named event wrappers and added `tests/contracts/electron-bridge-hardening-contract.test.js`.
+- Added companion route permission gating in `src/main/companion/companion-backend-dispatch.js` for LLM thinking changes, agent activation, capability toggles, daemon control, and task queue actions; `tests/contracts/companion-route-permission-contract.test.js` now locks those checks.
+- Applied the central execution-directory path policy to `read_file`, `write_file`, `edit_file`, `list_directory`, `file_exists`, and `delete_file` in `src/main/mcp/register-file-tools.js`, while preserving explicit session workspace and agentin roots; added `tests/contracts/file-tool-execution-policy-contract.test.js`.
+- Added `src/main/settings-security.js` and wired generic settings IPC so secret-like keys cannot be saved through `save-setting` or `update-settings`, and secret-like values are redacted from `get-setting-value` and `get-settings`; added `tests/contracts/generic-settings-secret-guard-contract.test.js`.
+- Finished the reviewed `fetch_url` network policy in `src/main/mcp/register-web-system-tools.js` with private/local/reserved address blocking, manual redirect validation and limits, non-text content-type rejection, and a session-id-aware persisted response path; added `tests/contracts/fetch-url-network-policy-contract.test.js`.
+- Removed the remaining direct renderer `require('electron')` usage from `src/renderer/components/plugin-studio-telegram-panel.js`; external links now go through a narrow `shell:open-external` IPC handler with protocol allowlisting, and the Electron bridge hardening contract now blocks renderer component Electron imports.
+- Hardened `mobile/src/screens/WebCompanionScreen.tsx` so the WebView origin allowlist and top-level navigation are limited to the paired companion origin, and native voice bridge messages are ignored unless they originate from that same origin; updated `tests/contracts/mobile-web-companion-contract.test.js`.
+- Extended the line-budget contract to scan `mobile` and `agentin/plugins` source files, include TypeScript/TSX extensions, and exclude generated/vendor paths such as `mobile/package-lock.json` and `node_modules`.
+- Fixed `src/main/tool-permission-service.js` global permission resolution so DB-active tools are still filtered through capability group state and file mode; unsafe custom tools and file-write tools no longer appear globally active just because their DB flag is true. Added `tests/contracts/tool-permission-global-policy-contract.test.js`.
+- Moved custom tool execution out of the Electron main process: `src/main/mcp-server.js` now dispatches custom tool bodies through `src/main/custom-tool-sandbox.js`, which forks `src/main/custom-tool-sandbox-runner.js`; the runner uses a VM context with `require`, `process`, timers, fetch, Buffer, and string code generation unavailable, plus result-size and wall-clock limits. Added `tests/contracts/custom-tool-sandbox-contract.test.js`.
+- Restricted companion CORS handling so `sendJson` and `sendCors` no longer advertise wildcard origins; they only reflect same host/port companion origins or explicit `LOCALAGENT_COMPANION_ALLOWED_ORIGINS`. General companion API routes now ignore `token` and `accessToken` query parameters; only legacy artifact media URLs keep query-token compatibility until they are replaced by short-lived media tickets. Added `tests/contracts/companion-cors-auth-contract.test.js`.
+- Added a per-WebView native bridge nonce in `mobile/src/screens/WebCompanionScreen.tsx` and `src/main/companion/companion-web/assets/voice-input.js`; Android native voice messages now must pass both the paired-origin check and the nonce echo check before microphone start/stop is honored. Updated `tests/contracts/mobile-web-companion-contract.test.js`.
+- Finished the first real Electron privilege migration: `src/main/window-manager.js` now creates BrowserWindows with `nodeIntegration: false`, `contextIsolation: true`, and an isolated preload at `src/renderer/electron-api.js`; `src/renderer/index.html` now loads `electron-api-facade.js` instead of loading the preload as a normal renderer script. Updated `tests/contracts/electron-bridge-hardening-contract.test.js` and `tests/contracts/window-manager-contract.test.js`.
+- Replaced companion artifact bearer-token URLs with short-lived artifact tickets. `src/main/companion-auth.js` now issues and validates file/session-bound artifact tickets, companion clients request `/companion/artifact/ticket`, and raw artifact URLs use `?ticket=` instead of `?token=`. Added `tests/contracts/companion-artifact-ticket-contract.test.js`.
+- Finished the reviewed custom-tool capability default: custom tools now declare a sandbox policy with filesystem, network, and subprocess capabilities defaulting to false, non-empty capability requests are rejected until implemented, and the sandbox contract covers denied fetch/Buffer/process access plus oversized output.
+- Moved companion session/bearer tokens into the credential/API-key storage path when available, with legacy settings migrated on read. Added `tests/contracts/companion-credential-storage-contract.test.js`.
+- Moved Qwen OAuth credential import/read paths and LM Studio API-key reads toward credential/API-key storage; legacy values are migrated when read. Added `tests/contracts/provider-credential-storage-contract.test.js`.
+- Applied the execution-directory path policy to media tools (`get_image_info`, `open_media`, `play_audio`, `view_image`, and `screenshot`) and added `tests/contracts/media-tool-execution-policy-contract.test.js`.
+- Added `src/main/providers/provider-http.js` and moved OpenAI-compatible, OpenRouter, Ollama, and LM Studio provider adapter generation/model-list calls behind the shared provider timeout/error/cancellation helper. Added `tests/contracts/provider-http-policy-contract.test.js`.
+- Added workflow, research, and subtask runtime roots to `runtime-paths` and wired bootstrap to use them; added `tests/contracts/runtime-paths-coverage-contract.test.js`.
+- Tightened mobile mixed-content behavior so HTTPS WebView sessions use `mixedContentMode="never"` while HTTP bootstrap keeps compatibility mode, and documented the remaining LAN cleartext threat model in `androidapp.md`.
+- Added an 850-line soft warning threshold to the line-budget contract while keeping the hard 1000-line failure threshold.
+- Routed plugin secret config through credential storage. `src/main/plugin-config-store.js` now moves manifest/secret-like plugin fields out of `settings`, renderer-facing plugin config gets redacted placeholders, plugin runtime config still receives real values, and Telegram secret fields are declared with `secret: true`. Added `tests/contracts/plugin-secret-config-contract.test.js`.
+- Extended the central execution-directory path policy to prompt/rule tools and connector-created files. `manage_rule`, `modify_system_prompt`, and `connector_op create` now assert containment with explicit runtime roots, and connector names reject path-like traversal. Added `tests/contracts/prompt-tool-execution-policy-contract.test.js` and `tests/contracts/connector-tool-execution-policy-contract.test.js`.
+- Added checksum reconciliation for packaged `agentin` seeding. `ensureMutableAgentinRoot` now records seeded file hashes, updates unchanged seeded defaults when bundled content changes, and preserves user-edited files. Updated `tests/contracts/runtime-paths-packaged-contract.test.js`.
+- Split agent chat-UI resolution out of `src/main/plugin-manager.js` into `src/main/plugin-agent-ui-service.js`, dropping `plugin-manager.js` from the soft line-budget warning list while keeping the public plugin manager methods as delegators.
+- Moved remaining reviewed LLM IPC model-management HTTP calls and Qwen adapter HTTP calls behind `providerRequest`, including labeled LM Studio load/unload/discovery and Qwen verification/model/OAuth requests. Updated `tests/contracts/provider-http-policy-contract.test.js`.
+- Added a process-level V8 heap ceiling for custom-tool sandbox child workers via `--max-old-space-size=64`, keeping the existing VM timeout and output caps. Updated `tests/contracts/custom-tool-sandbox-contract.test.js`.
+- Added an app-level Android cleartext host guard: HTTP companion URLs now have to target localhost, `.local`, private IPv4, loopback, or link-local hosts before they are saved, loaded, deep-linked, or opened. Updated `tests/contracts/mobile-web-companion-contract.test.js` and `androidapp.md`.
+- Added `src/main/startup-profiler.js` and wired bootstrap stages through it. Startup can now emit ordered timing marks with `--startup-trace` or `LOCALAGENT_STARTUP_TRACE=1`, and the profiler is registered in the service container for later diagnostics. Added `tests/contracts/startup-profiler-contract.test.js`.
+- Added `src/main/runtime-policy.js` as the first principal/profile runtime policy layer. It supports strict and wide profiles, plugin legacy/strict profiles, explicit grants, and plugin manifest `runtimePermissions`. Added `tests/contracts/runtime-policy-contract.test.js`.
+- Wired runtime policy enforcement into `src/main/mcp-server.js` for `tool.execute` and into `src/main/plugin-manager.js` for plugin actions, handler/chat-UI registration, config reads/writes, connector access, managed processes, and plugin logging. Added `tests/contracts/plugin-runtime-boundary-contract.test.js`.
+- Moved remaining general runtime constructor fallbacks for prompts, workflows, research, subtasks, workspaces, agents, memory, background daemon, connectors, knowledge, event prompts, and bundled plugin setup through `runtime-paths`. Updated `tests/contracts/runtime-paths-coverage-contract.test.js` to block new production `process.cwd()`/`__dirname` `agentin` fallbacks except the intentionally allowlisted Codex CLI working-directory fallback.
+- Extended `RuntimePolicy` coverage into renderer IPC handler registration and authenticated companion route dispatch. Added `tests/contracts/ipc-runtime-policy-contract.test.js` and updated `tests/contracts/companion-route-permission-contract.test.js`.
+- Added explicit renderer IPC and companion principals, plus strict/normal/wide subagent policy profile assignment. Subagent runs now persist `runtime_policy_profile` and grants in request/status/database metadata, and delegated execution receives the same principal/profile context. Added `tests/contracts/subagent-runtime-policy-contract.test.js`.
+- Moved persisted plugin auto-enable off the bootstrap fast path. `PluginManager.initialize()` keeps legacy default behavior, while bootstrap initializes scan-only and schedules `enablePersistedPlugins()` after `bootstrap.ready`.
+- Added `src/main/network-policy.js` with named provider/local-probe/external-web helpers and moved embedding probes, Ollama checks, A2A target calls, and startup connectivity diagnostics behind those helpers. Added `tests/contracts/network-policy-wrapper-contract.test.js`.
+- Replaced generic settings secret-key denylist behavior with an ordinary-settings allowlist, added startup migration for legacy secret-like setting rows into credential storage, and routed connector secret-like config through credential storage with renderer redaction. Added `tests/contracts/connector-secret-config-contract.test.js`.
+- Upgraded companion artifact tickets to one-time use while preserving the short-lived file/session-bound ticket model.
+- Split plugin managed-process ownership into `src/main/plugin-process-service.js`, added plugin manifest `runtimePermissions` validation, and kept legacy plugin behavior routed through `plugin-legacy`.
+- Split plugin discovery/manifest validation into `src/main/plugin-discovery-service.js`, plugin enablement/sidebar state into `src/main/plugin-state-store.js`, plugin module loading/cache cleanup into `src/main/plugin-module-loader.js`, and public list/detail summaries into `src/main/plugin-summary-service.js`.
+- `src/main/plugin-module-loader.js` now rejects plugin manifest main entrypoints that resolve outside the plugin directory.
+- Added explicit companion bearer-token lifecycle policy. Bearer access tokens are now opaque runtime credentials with issued/expiry metadata, authentication rotates them, validation rejects expired tokens, and legacy bearer strings migrate into the expiring credential format. Added `tests/contracts/companion-token-lifecycle-contract.test.js`.
+- Reduced custom-tool worker inherited environment to a small sandbox env instead of passing the parent process environment.
+- Removed a remaining renderer raw `ipcRenderer.invoke(...)` plugin toggle path and strengthened the Electron bridge hardening contract so all renderer JS, except the preload itself, is checked for raw Electron IPC calls.
+
+P0 Findings
+
+1. Electron renderer is isolated, but the exposed bridge surface remains broad.
+Evidence:
+- `src/main/window-manager.js` now sets `nodeIntegration: false`, `contextIsolation: true`, and a preload bridge.
+- `src/renderer/electron-api.js` exposes `electronBridge` through `contextBridge.exposeInMainWorld(...)`.
+- `src/renderer/electron-api-facade.js` creates a mutable page-world facade so existing renderer patches can work without Node access.
+- `src/renderer/electron-api.js` now uses named event wrappers instead of generic renderer `on(channel)` access.
+- Renderer components no longer import Electron directly; external shell access is mediated through `shell:open-external`.
+- A remaining `ipcRenderer.invoke(...)` call in `src/renderer/components/plugin-panel.js` was removed and replaced with the named plugin bridge wrappers.
+- `tests/contracts/electron-bridge-hardening-contract.test.js` now scans all renderer JavaScript, except the preload itself, for direct Electron IPC imports/calls.
+Why this matters:
+- Renderer XSS no longer gets Node/Electron imports directly, but it can still call every exposed bridge method.
+- The next risk is bridge API breadth, not raw renderer main-process capability.
+Required work:
+- Split the bridge into smaller domain APIs with explicit allowlists and contracts for high-risk methods.
+- Keep raw debug invoke disabled outside explicit local debug mode.
+- Continue moving any remaining privileged renderer feature work behind narrow named wrappers instead of broad compatibility methods.
+
+2. Custom tool execution is sandboxed out of process, but still needs OS-level resource controls.
+Evidence:
+- `src/main/mcp/register-prompt-tools.js:477` registers `create_tool`.
+- `src/main/mcp-server.js` now sends custom tool code through `runCustomToolInSandbox(...)` instead of `new Function(...)` in the main process.
+- `src/main/custom-tool-sandbox.js` forks `src/main/custom-tool-sandbox-runner.js`, and the runner executes in a VM context with Node globals hidden, string code generation disabled, output-size limits, and wall-clock timeouts.
+- `tests/contracts/custom-tool-sandbox-contract.test.js` proves a custom tool can run ordinary parameter code, cannot see `process` or `require`, cannot use the `Function` constructor escape, and times out on an infinite loop.
+- Custom tools now declare a sandbox policy with filesystem, network, and subprocess capabilities defaulting to false; non-empty capability requests are rejected until those capabilities have explicit implementations.
+Why this matters:
+- Custom tools are expected to execute code, and the main-process boundary is now reduced.
+- Node VM contexts are still not a complete OS sandbox; the child process now has a bounded V8 heap, but stronger OS job/cgroup-style limits would be needed before custom tools should be treated as low-risk.
+Required work:
+- Keep dynamic-code tools classified as unsafe and permission-gated by default.
+- Add stronger OS-level process/resource constraints where available.
+- If filesystem/network/subprocess capabilities are ever enabled, implement them as narrow brokered capabilities rather than exposing Node globals.
+
+3. Active-tool permission context can ignore group/file-mode policy, and file tools bypass the central execution path policy.
+Evidence:
+- `src/main/tool-permission-service.js` global context now combines main switch, DB active state, and `capabilityManager.isToolActive(toolName)`.
+- `src/main/tool-permission-service.js:344` through `:363` applies group and mode checks only in the agent-scoped path.
+- `src/main/ipc/register-tools-capability-handlers.js:213` returns active tool names from the global context.
+- `src/main/runtime-policy.js` now provides a central principal/profile policy decision point, and `src/main/mcp-server.js` checks `tool.execute` through it before invoking non-internal tools.
+- `src/main/mcp/register-terminal-tools.js`, `src/main/mcp/register-file-tools.js`, `src/main/mcp/register-media-tools.js`, `src/main/mcp/register-prompt-tools.js`, and `src/main/mcp/register-connector-tools.js` now check `assertExecutionPathAllowed` for terminal, file, media, prompt/rule, and connector-created paths.
+- Companion raw artifacts are constrained through session workspace entrypoints and now require short-lived, one-time artifact tickets for media URLs.
+- Plugin runtime actions/config/connectors/managed-process hooks now pass through runtime policy.
+- Renderer IPC handlers now register through a runtime-policy wrapper, and authenticated companion route dispatch checks `companion.route`.
+- Subagent runs now carry strict/normal/wide runtime-policy profile metadata and explicit grants through request/status/database records into delegated execution context.
+- A few remaining agent file-like operations still need to share the same resolver.
+Why this matters:
+- UI-visible active tools are closer to agent-scoped behavior, and there is now a central policy hook that can represent strict vs wide principals without flattening every subsystem into one sandbox.
+- The central path policy now covers terminal, first-party file tools, media tools, prompt/rule tools, connector-created files, IPC registration, companion route dispatch, and subagent launch metadata, but it is not yet authoritative across every file-like runtime surface.
+Required work:
+- Extend runtime policy/path checks into the remaining agent file-like operations.
+- Add contract tests for group-disabled tools and file-mode-disabled tools across UI, agent, IPC, and companion paths.
+
+P1 Findings
+
+4. Companion API auth and CORS hardening is complete for the reviewed scope.
+Evidence:
+- `src/main/companion/companion-server-core.js` now reflects CORS only for same host/port origins or explicit `LOCALAGENT_COMPANION_ALLOWED_ORIGINS`.
+- `src/main/companion/companion-api-server.js` now ignores query bearer tokens on general API routes.
+- Artifact media previews now use short-lived file/session-bound artifact tickets instead of durable bearer tokens in the URL.
+- `src/main/companion-auth.js` now stores companion session/bearer tokens through credential storage when available and migrates legacy settings on read.
+- Artifact tickets are now consumed on successful validation, making the compatibility ticket model one-time use.
+- Bearer access tokens now have issued/expiry metadata, authenticate rotates them, validation rejects expired tokens, and legacy bearer strings are migrated into expiring credential records.
+Why this matters:
+- General control-route query-token auth is reduced, and wildcard CORS is removed from the companion core.
+- Artifact URLs can still leak a short-lived ticket through URLs, logs, browser history, and referrers, but the ticket is now scoped, short-lived, and single-use.
+Required work:
+- Closed for this review.
+
+5. Mobile WebView cleartext/bootstrap mode still needs a tighter threat model.
+Evidence:
+- `mobile/src/screens/WebCompanionScreen.tsx` now derives `companionOrigin`, uses it as `originWhitelist`, checks `onShouldStartLoadWithRequest`, and checks the message source URL before honoring `localagent.voice.start` or `localagent.voice.stop`.
+- `mobile/src/screens/WebCompanionScreen.tsx` now injects a per-WebView native bridge nonce before page JS runs and rejects native voice messages that do not echo it.
+- `src/main/companion/companion-web/assets/voice-input.js` now echoes the nonce on React Native WebView messages and rejects native events with a bad nonce.
+- `mobile/src/screens/WebCompanionScreen.tsx` grants media capture for same-host requests and now uses `mixedContentMode={config.useTls ? 'never' : 'compatibility'}`.
+- `mobile/app.json:22` enables Android cleartext traffic.
+- `mobile/src/services/webCompanionConfig.ts` and `mobile/src/screens/WebCompanionConnectScreen.tsx` now restrict HTTP cleartext companion hosts to local/private addresses before a config is saved or opened.
+- `androidapp.md` now documents HTTP as LAN bootstrap/fallback, the app-level cleartext host guard, and HTTPS as the mode that blocks mixed content.
+Why this matters:
+- The primary broad-navigation/native-message gap is reduced further; app code now rejects public cleartext companion hosts, but Android cleartext is still enabled globally in the generated manifest to support dynamic LAN bootstrap addresses.
+Required work:
+- If this moves out of managed Expo or gets a generated Android project, add a platform network-security config for any stable development hosts. Dynamic LAN IPs still need app-level checks.
+
+6. Secrets and credentials are partially separated from ordinary settings; remaining risk is schema coverage.
+Evidence:
+- `src/main/database.js:340` persists arbitrary setting keys and values.
+- Generic renderer settings IPC now denies or redacts secret-like keys through `src/main/settings-security.js`.
+- `src/main/plugin-config-store.js` now routes plugin manifest secrets and secret-like plugin keys through credential storage, migrating legacy setting rows on read.
+- Startup now migrates remaining secret-like setting rows into credential storage where available, then deletes or blanks the legacy setting.
+- Generic settings IPC now uses an ordinary-settings allowlist instead of only a broad secret-key denylist.
+- `src/main/connector-runtime.js` now stores connector secret-like config values through credential storage and returns redacted values to renderer callers.
+- `agentin/plugins/telegram-relay/plugin.json` now declares bot tokens, API hashes, session strings, proxy passwords, and proxy secrets with `secret: true`.
+- Qwen OAuth credentials and LM Studio API-key reads now prefer credential/API-key storage and migrate legacy settings when read.
+Why this matters:
+- The worst plugin/connector/settings plaintext paths are reduced, and renderer-facing config no longer echoes actual declared secrets.
+- Remaining secret risk is future manifests/config schemas that add secret-like fields without declaring them.
+Required work:
+- Extend the declared-secret model to future plugin manifests and connector schemas as they grow.
+- Add a small audit/reporting path for settings that are rejected by the ordinary-settings allowlist so new legitimate settings get declared intentionally.
+
+7. Runtime path centralization is stronger, but path ownership still needs classification.
+Evidence:
+- `src/main/runtime-paths.js` centralizes many mutable and bundled paths.
+- `src/main/runtime-paths.js` now includes workflow, research, and subtask roots, and bootstrap uses those paths.
+- The seeding helper now reconciles changed bundled defaults/plugin definitions when the target file still matches the previously seeded hash, and preserves user-modified files.
+- General production fallback constructors for prompts, workflows, research, subtasks, workspaces, agents, memory, background daemon, connectors, knowledge, event prompts, and plugin setup now derive from `runtime-paths`.
+- `tests/contracts/runtime-paths-coverage-contract.test.js` now blocks new production `process.cwd()` or `__dirname ../../agentin` fallback constructors, with the Codex CLI working-directory fallback intentionally allowlisted because it is an execution-root default rather than app data ownership.
+Why this matters:
+- Packaged builds can drift from development behavior.
+- Once a user has an old copied default/plugin file, app upgrades may not deliver updated bundled content.
+Required work:
+- Keep `runtime-paths` as the only source for app data, bundled defaults, runtime plugins, workspaces, memory, connectors, and generated runtime state.
+- Review non-`agentin` runtime path assumptions such as CLI working directories and renderer/static paths separately from mutable app data paths.
+
+8. Provider calls and web fetch policy need centralized network policy.
+Evidence:
+- `src/main/providers/openai-compatible-adapter.js`, `src/main/providers/openrouter-adapter.js`, `src/main/providers/lmstudio-adapter.js`, and `src/main/providers/ollama-adapter.js` now have explicit axios timeouts on the reviewed generation/model-list paths.
+- Those provider adapters now call `src/main/providers/provider-http.js` for timeout/error/cancellation behavior.
+- `src/main/ipc/register-llm-handlers.js` now uses `providerRequest` for LM Studio native model discovery/load/unload and Qwen API-key verification.
+- `src/main/providers/qwen-adapter.js` now uses `providerRequest` and shared cancellation detection for Qwen generation, model listing, and OAuth API-key exchange.
+- `src/main/mcp/register-web-system-tools.js` now has protocol, timeout, response-size, private-address/SSRF, redirect-limit, and content-type policy.
+- `src/main/network-policy.js` now provides explicit local-probe and external-web helpers with standard timeout and URL policy behavior.
+- Embedding service calls, Ollama service checks, startup diagnostics, and A2A target probing/execution now go through the named network-policy helpers, with the A2A stream path at least asserting policy before opening the raw stream request.
+Why this matters:
+- Provider adapter behavior, LLM IPC model-management, local probes, startup diagnostics, and A2A calls now share named policy entrypoints.
+- `fetch_url` is now less exposed to local-service SSRF, and remaining raw HTTP usage is narrower and easier to audit.
+Required work:
+- Continue auditing streaming/raw HTTP paths and add user-visible timeout messages where errors still surface as low-level transport errors.
+
+9. Source-size policy is fragile and enforcement misses important trees.
+Evidence:
+- Current near-cap tracked files include `src/renderer/components/plugin-studio-tts-panel.js` at 1000 lines, `src/renderer/components/skin-manager.js` at 1000, `src/renderer/styles/theme.css` at 999, `src/renderer/components/main-panel.js` at 996, `src/renderer/components/sidebar.js` at 995, `src/main/ipc/register-llm-handlers.js` at 953, and `src/main/subtask-runtime.js` at about 960 lines after the subagent policy metadata work.
+- `src/main/llm-model-specs.json` is 1065 lines and allowlisted by `tests/fixtures/line-budgets.json`.
+- `mobile/package-lock.json` is generated/vendor-like and now explicitly excluded from the line-budget contract.
+- The line-budget contract now scans `src`, `tools`, `tests`, `mobile`, and `agentin/plugins`.
+- `tests/fixtures/line-budgets.json` now defines an 850-line soft warning threshold.
+Why this matters:
+- Files at 990+ lines cannot absorb ordinary maintenance without breaking the instruction.
+- Near-cap source files still need proactive splits before ordinary maintenance pushes them over the hard cap.
+Required work:
+- Split the 990+ line modules before adding features to them.
+- Split or carve down the files already warning at 850+ lines, especially those at 990-1000 lines.
+
+P2 Findings
+
+10. Silent catch blocks and warning-only failures make production behavior hard to reason about.
+Evidence:
+- Broad review found multiple catch blocks that ignore errors or only warn, including runtime, provider, plugin, and renderer flows.
+Why this matters:
+- Optional behavior is fine, but swallowed failures in state sync, plugin loading, file reconciliation, or IPC paths make corruption and drift look like success.
+Required work:
+- Classify catch blocks as expected optional failures, user-visible failures, or bugs.
+- Add structured logging and metrics for repeated failures.
+- Convert state-changing silent failures into surfaced errors.
+
+11. Test fakes are broad enough to hide integration drift.
+Evidence:
+- Prior contract tests mock major Electron and main-process services.
+- The companion and IPC route surfaces are growing, while permission/path assertions are scattered.
+- New focused contracts now cover IPC runtime-policy registration, companion route runtime-policy denial, subagent policy metadata, network helper usage, connector secret config, and all-renderer Electron IPC import/call scanning.
+Why this matters:
+- The code can satisfy fakes while real route tables, IPC names, capability groups, or runtime paths diverge.
+Required work:
+- Add contract tests over actual route/IPC registration tables where possible.
+- Prefer small integration harnesses for permission, route, and path policy checks.
+- Keep unit fakes, but make them verify shape and required method coverage.
+
+12. Plugin/runtime ownership boundaries are not crisp enough.
+Evidence:
+- `src/main/plugin-manager.js` is now well under the soft line-budget threshold after config storage, agent chat-UI resolution, discovery, persistent state, module loading, process control, and public summaries were split into dedicated modules.
+- `src/main/runtime-policy.js` now owns the first plugin runtime permission decisions, and `src/main/plugin-manager.js` calls it at plugin context/action boundaries.
+- `src/main/plugin-process-service.js` now owns managed plugin process tracking and emergency termination hooks.
+- `src/main/plugin-discovery-service.js` now owns plugin directory scanning, manifest parsing, manifest runtime-permission validation, and DB row seeding.
+- `src/main/plugin-state-store.js` now owns plugin status and sidebar visibility persistence.
+- `src/main/plugin-module-loader.js` now owns plugin entrypoint containment, module loading, and plugin subtree require-cache cleanup.
+- `src/main/plugin-summary-service.js` now owns UI-facing plugin list/detail summaries.
+- `src/main/runtime-policy.js` now validates plugin manifest `runtimePermissions`, while legacy plugin manifests continue through `plugin-legacy`.
+- `src/main/plugin-manager.js` still owns lifecycle orchestration, plugin context creation, handler registration/cleanup, knowledge generation, and plugin action dispatch.
+- Runtime code spans `agentin/plugins`, `src/main/mcp`, `src/main/plugin-*`, and renderer plugin studio surfaces.
+Why this matters:
+- Plugin runtime access is no longer just implicit context shape, and the manager is now closer to an orchestrator than a monolith.
+Required work:
+- Split plugin context construction/handler registration only if it grows further; keeping lifecycle orchestration in `PluginManager` is acceptable for now.
+- Move manifest schema validation into a dedicated module if runtimePermissions grows beyond the current simple validator.
+
+Current Priority Queue
+- Closed. This review file is no longer the active source of truth for future work.
+- Known residual topics for a fresh review: renderer bridge domain splitting, remaining agent file-like policy coverage, startup trace follow-up, silent-catch cleanup, stronger OS-level sandbox limits, streaming/raw HTTP audit, and Android platform network-security config if a native Android project appears.
+
+Suggested Review Gates
+- Security gate: no dynamic code execution in safe tools; no raw IPC; no broad WebView bridge; all control routes permission-declared.
+- Path gate: every file-like operation resolves through one containment helper and has traversal tests.
+- Secret gate: secret-like keys cannot be saved through generic settings or plugin config paths.
+- Size gate: no source file over 1000 lines; warning at 850 lines; generated/vendor exceptions documented.
+- Runtime gate: packaged and development builds use the same runtime-path abstraction and reconcile bundled updates predictably.
+
+Validation
+- Static review plus follow-up fixes.
+- Ran `node --check src/main/workflow-manager.js`.
+- Ran `node --check src/main/companion/companion-server-core.js`.
+- Ran `node --check src/main/a2a-http-server.js`.
+- Ran `node --check src/main/mcp/register-web-system-tools.js`.
+- Ran `node --check src/main/providers/openai-compatible-adapter.js`.
+- Ran `node --check src/main/providers/openrouter-adapter.js`.
+- Ran `node --check src/main/providers/lmstudio-adapter.js`.
+- Ran `node --check src/main/providers/ollama-adapter.js`.
+- Ran `git diff --check`.
+- Ran `node --check src/renderer/electron-api.js`.
+- Ran `node --check src/renderer/components/main-panel-tabs.js`.
+- Ran `node --check src/renderer/components/plugin-panel.js`.
+- Ran `node --check src/renderer/components/research-orchestrator-ui.js`.
+- Ran `node --check src/main/ipc/register-tools-capability-handlers.js`.
+- Ran targeted `renderer-electron-api-contract`.
+- Ran `node --check src/renderer/app.js`.
+- Ran `node --check src/main/bootstrap.js`.
+- Ran `node --check src/main/session-workspace.js`.
+- Ran `node --check tests/contracts/session-workspace-contract.test.js`.
+- Ran targeted `session-workspace-contract`.
+- Ran `node --check src/main/mcp/register-prompt-tools.js`.
+- Ran `node --check tests/contracts/calculate-tool-safety-contract.test.js`.
+- Ran targeted `calculate-tool-safety-contract`.
+- Ran `node --check src/renderer/components/plugin-studio-panel.js`.
+- Ran `node --check src/renderer/components/workflow-editor.js`.
+- Ran `node --check tests/contracts/electron-bridge-hardening-contract.test.js`.
+- Ran targeted `electron-bridge-hardening-contract`.
+- Ran `node --check src/main/companion/companion-backend-dispatch.js`.
+- Ran `node --check src/main/companion-permissions.js`.
+- Ran `node --check tests/contracts/companion-route-permission-contract.test.js`.
+- Ran targeted `companion-route-permission-contract`.
+- Ran `node --check src/main/mcp/register-file-tools.js`.
+- Ran `node --check tests/contracts/file-tool-execution-policy-contract.test.js`.
+- Ran targeted `file-tool-execution-policy-contract`.
+- Ran adjacent targeted `private-execution-policy-contract`.
+- Ran adjacent targeted `edit-file-tool-contract`.
+- Ran `node --check src/main/settings-security.js`.
+- Ran `node --check src/main/ipc/register-chat-data-handlers.js`.
+- Ran `node --check src/main/ipc/register-llm-handlers.js`.
+- Ran `node --check src/main/ipc/register-workflow-handlers.js`.
+- Ran `node --check tests/contracts/generic-settings-secret-guard-contract.test.js`.
+- Ran targeted `generic-settings-secret-guard-contract`.
+- Ran `node --check src/main/mcp/register-web-system-tools.js`.
+- Ran `node --check tests/contracts/fetch-url-network-policy-contract.test.js`.
+- Ran targeted `fetch-url-network-policy-contract`.
+- Ran `node --check src/main/ipc/register-app-control-handlers.js`.
+- Ran `node --check src/renderer/components/plugin-studio-telegram-panel.js`.
+- Ran `node --check tests/contracts/app-control-contract.test.js`.
+- Ran targeted `app-control-contract`.
+- Re-ran targeted `electron-bridge-hardening-contract`.
+- Ran `node --check tests/contracts/mobile-web-companion-contract.test.js`.
+- Ran targeted `mobile-web-companion-contract`.
+- Ran `node --check tests/contracts/line-budget-contract.test.js`.
+- Ran targeted `line-budget-contract`.
+- Ran `node --check src/main/tool-permission-service.js`.
+- Ran `node --check tests/contracts/tool-permission-global-policy-contract.test.js`.
+- Ran targeted `tool-permission-global-policy-contract`.
+- Re-ran targeted `per-agent-permission-contract`.
+- Ran `node --check src/main/custom-tool-sandbox.js`.
+- Ran `node --check src/main/custom-tool-sandbox-runner.js`.
+- Ran `node --check tests/contracts/custom-tool-sandbox-contract.test.js`.
+- Ran targeted `custom-tool-sandbox-contract` with approval because the normal sandbox blocks child-process spawn.
+- Ran `node --check tests/contracts/companion-cors-auth-contract.test.js`.
+- Ran targeted `companion-cors-auth-contract`.
+- Re-ran `node --check src/main/companion/companion-server-core.js`.
+- Re-ran `node --check src/main/companion/companion-api-server.js`.
+- Re-ran `node --check src/main/companion/companion-backend-dispatch.js`.
+- Ran `node --check src/main/companion/companion-web/assets/voice-input.js`.
+- Re-ran targeted `mobile-web-companion-contract`.
+- Re-ran targeted `private-execution-policy-contract`.
+- Re-ran targeted `companion-route-permission-contract`.
+- Re-ran targeted `companion-web-shell-contract`.
+- Re-ran targeted `line-budget-contract`.
+- Ran `node --check src/main/plugin-config-store.js`.
+- Re-ran `node --check src/main/plugin-manager.js`.
+- Ran `node --check src/renderer/components/plugin-studio-telegram-panel.js`.
+- Ran `node --check tests/contracts/plugin-secret-config-contract.test.js`.
+- Re-ran `node --check tests/contracts/telegram-mtproto-plugin-contract.test.js`.
+- Ran targeted `plugin-secret-config-contract`.
+- Re-ran targeted `telegram-mtproto-plugin-contract`.
+- Re-ran targeted `plugin-lifecycle-contract`.
+- Re-ran `node --check src/main/mcp/register-prompt-tools.js`.
+- Ran `node --check tests/contracts/prompt-tool-execution-policy-contract.test.js`.
+- Ran targeted `prompt-tool-execution-policy-contract`.
+- Ran `node --check src/main/connector-name-policy.js`.
+- Ran `node --check src/main/mcp/register-connector-tools.js`.
+- Ran `node --check src/main/connector-runtime.js`.
+- Ran `node --check tests/contracts/connector-tool-execution-policy-contract.test.js`.
+- Ran targeted `connector-tool-execution-policy-contract`.
+- Re-ran targeted `mcp-runtime-paths-contract`.
+- Re-ran targeted `path-portable-tools-contract`.
+- Re-ran `node --check src/main/runtime-paths.js`.
+- Re-ran `node --check tests/contracts/runtime-paths-packaged-contract.test.js`.
+- Re-ran targeted `runtime-paths-packaged-contract`.
+- Re-ran targeted `runtime-paths-contract`.
+- Re-ran targeted `runtime-paths-coverage-contract`.
+- Ran `node --check src/main/plugin-agent-ui-service.js`.
+- Re-ran `node --check src/main/plugin-manager.js`.
+- Re-ran targeted `agent-chat-ui-contract`.
+- Re-ran targeted `plugin-lifecycle-contract`.
+- Re-ran targeted `tts-entrypoint-contract`.
+- Re-ran targeted `line-budget-contract`; `src/main/plugin-manager.js` no longer appears in soft line-budget warnings.
+- Re-ran `node --check src/main/ipc/register-llm-handlers.js`.
+- Re-ran `node --check src/main/providers/qwen-adapter.js`.
+- Re-ran `node --check tests/contracts/provider-http-policy-contract.test.js`.
+- Re-ran targeted `provider-http-policy-contract`.
+- Re-ran targeted `provider-credential-storage-contract`.
+- Re-ran `node --check src/main/custom-tool-sandbox.js`.
+- Re-ran `node --check tests/contracts/custom-tool-sandbox-contract.test.js`.
+- Re-ran targeted `custom-tool-sandbox-contract` with approval because the normal sandbox blocks child-process spawn.
+- Re-ran `node --check tests/contracts/mobile-web-companion-contract.test.js`.
+- Re-ran targeted `mobile-web-companion-contract`.
+- Full test suites were not run.
+- Ran `node --check src/main/runtime-policy.js`.
+- Ran `node --check src/main/startup-profiler.js`.
+- Re-ran `node --check src/main/bootstrap.js`.
+- Re-ran `node --check src/main/plugin-manager.js`.
+- Re-ran `node --check src/main/mcp-server.js`.
+- Ran `node --check` on runtime-path fallback modules: prompt-file-manager, subtask-runtime, research-runtime, workflow-runtime, workflow-manager, session-workspace, session-init-manager, agent-memory, agent-loop, agent-manager, background-memory-daemon, backend-event-bus, connector-runtime, knowledge-manager, and plugin-setup-service.
+- Ran `node --check tests/contracts/plugin-runtime-boundary-contract.test.js`.
+- Ran targeted `runtime-policy-contract`.
+- Ran targeted `startup-profiler-contract`.
+- Ran targeted `plugin-runtime-boundary-contract`.
+- Re-ran targeted `runtime-paths-coverage-contract`.
+- Re-ran targeted `plugin-lifecycle-contract`.
+- Re-ran targeted `agent-chat-ui-contract`.
+- Re-ran targeted `mcp-runtime-paths-contract`.
+- Re-ran targeted `path-portable-tools-contract`.
+- Ran `node --check src/main/ipc/runtime-policy-ipc.js`.
+- Ran `node --check src/main/network-policy.js`.
+- Ran `node --check src/main/plugin-process-service.js`.
+- Re-ran `node --check src/main/runtime-policy.js`.
+- Re-ran `node --check src/main/bootstrap.js`.
+- Re-ran `node --check src/main/plugin-manager.js`.
+- Re-ran `node --check src/main/subtask-runtime.js`.
+- Re-ran `node --check src/main/agent-subagent-run-methods.js`.
+- Re-ran `node --check src/main/agent-batch-invoker.js`.
+- Re-ran `node --check src/main/mcp/register-agent-tools.js`.
+- Re-ran `node --check src/main/database.js`.
+- Re-ran `node --check src/main/database-migrations.js`.
+- Re-ran `node --check src/main/companion-auth.js`.
+- Re-ran `node --check src/main/companion/companion-backend-dispatch.js`.
+- Re-ran `node --check src/main/settings-security.js`.
+- Re-ran `node --check src/main/connector-runtime.js`.
+- Re-ran `node --check src/main/custom-tool-sandbox.js`.
+- Re-ran `node --check src/main/embedding-service.js`.
+- Re-ran `node --check src/main/ollama-service.js`.
+- Re-ran `node --check src/main/session-init-manager.js`.
+- Re-ran `node --check src/main/a2a-target-executor.js`.
+- Re-ran `node --check src/renderer/components/plugin-panel.js`.
+- Ran `node --check` on new/updated contracts for IPC runtime policy, subagent runtime policy, network policy wrappers, connector secret config, companion artifact tickets, companion route permission, generic settings secret guard, custom tool sandbox, and Electron bridge hardening.
+- Ran targeted `ipc-runtime-policy-contract`.
+- Ran targeted `subagent-runtime-policy-contract`.
+- Ran targeted `network-policy-wrapper-contract`.
+- Ran targeted `connector-secret-config-contract`.
+- Re-ran targeted `companion-artifact-ticket-contract`.
+- Re-ran targeted `companion-route-permission-contract`.
+- Re-ran targeted `generic-settings-secret-guard-contract`.
+- Re-ran targeted `runtime-policy-contract`.
+- Re-ran targeted `plugin-lifecycle-contract`.
+- Re-ran targeted `plugin-runtime-boundary-contract`.
+- Re-ran targeted `agent-chat-ui-contract`.
+- Re-ran targeted `tts-entrypoint-contract`.
+- Re-ran targeted `provider-http-policy-contract`.
+- Re-ran targeted `custom-tool-sandbox-contract` with approval because the normal sandbox blocks child-process spawn.
+- Re-ran targeted `line-budget-contract`.
+- Re-ran targeted `electron-bridge-hardening-contract`.
+- Ran `node --check src/main/plugin-discovery-service.js`.
+- Ran `node --check src/main/plugin-module-loader.js`.
+- Ran `node --check src/main/plugin-summary-service.js`.
+- Ran `node --check src/main/plugin-state-store.js`.
+- Re-ran `node --check src/main/plugin-manager.js`.
+- Ran `node --check` on plugin discovery, module loader, summary, and state-store contracts.
+- Ran targeted `plugin-discovery-service-contract`.
+- Ran targeted `plugin-module-loader-contract`.
+- Ran targeted `plugin-summary-service-contract`.
+- Ran targeted `plugin-state-store-contract`.
+- Re-ran targeted `plugin-lifecycle-contract`.
+- Re-ran targeted `plugin-runtime-boundary-contract`.
+- Re-ran targeted `plugin-secret-config-contract`.
+- Re-ran targeted `agent-chat-ui-contract`.
+- Re-ran targeted `line-budget-contract`; `src/main/plugin-manager.js` is now about 597 lines.
+- Re-ran `node --check src/main/companion-auth.js`.
+- Re-ran `node --check tests/contracts/companion-credential-storage-contract.test.js`.
+- Ran `node --check tests/contracts/companion-token-lifecycle-contract.test.js`.
+- Ran targeted `companion-token-lifecycle-contract`.
+- Re-ran targeted `companion-credential-storage-contract`.
+- Re-ran targeted `companion-cors-auth-contract`.
+- Re-ran targeted `companion-artifact-ticket-contract`.
+- Re-ran targeted `companion-route-permission-contract`.
+- Re-ran targeted `mobile-web-companion-contract`.
+- Attempted targeted `companion-browser-pairing-contract`; it failed on an existing static browser-app expectation for `create-chat-session`, before exercising token lifecycle behavior.
+
+Final Closed Review Summary
+Done:
+- Extended `RuntimePolicy` through IPC registration, companion route dispatch, plugin runtime boundaries, and subagent launch/run metadata.
+- Persisted strict/normal/wide subagent policy profiles and grants through request/status/database metadata and delegated execution context.
+- Moved persisted plugin auto-enable out of the bootstrap fast path while preserving default PluginManager behavior for existing callers.
+- Added named network-policy helpers and moved embedding, Ollama, A2A, and startup diagnostic calls behind them.
+- Migrated remaining secret-like settings into credential storage, tightened generic settings IPC with an allowlist, and routed connector secret config through credentials.
+- Made companion artifact tickets one-time use.
+- Split plugin managed-process ownership into `plugin-process-service` and validated plugin `runtimePermissions`.
+- Split plugin discovery, persistent state, module loading/cache cleanup, and public summaries out of `PluginManager`; plugin entrypoints are now contained to their own plugin directory.
+- Added explicit companion bearer-token expiry/rotation: authenticate rotates bearer credentials, validation rejects expired bearer tokens, and legacy bearer strings migrate into expiring credential records.
+- Reduced custom-tool worker inherited environment and kept custom tools unsafe/brokered by default.
+- Closed a remaining renderer raw IPC call path and expanded the Electron bridge hardening contract.
+
+Next steps:
+- None in this file. Start a fresh review from current code when another review pass is needed.

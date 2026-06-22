@@ -82,7 +82,10 @@ function getPluginConfig(context) {
     qwenModelsRoot,
     modelPathOverrides: normalizeModelOverrides(modelPathsJson, qwenModelsRoot),
     piperSourceDir: String(context.getConfig('piperSourceDir') || '').trim(),
-    piperVoiceId: String(context.getConfig('piperVoiceId') || DEFAULT_PIPER_VOICE_ID).trim() || DEFAULT_PIPER_VOICE_ID
+    piperVoiceId: String(context.getConfig('piperVoiceId') || DEFAULT_PIPER_VOICE_ID).trim() || DEFAULT_PIPER_VOICE_ID,
+    selectedProvider: String(context.getConfig('selectedProvider') || 'fast-qwen').trim() || 'fast-qwen',
+    selectedVoice: String(context.getConfig('selectedVoice') || '').trim(),
+    voiceDescription: String(context.getConfig('voiceDescription') || '').trim()
   };
 }
 

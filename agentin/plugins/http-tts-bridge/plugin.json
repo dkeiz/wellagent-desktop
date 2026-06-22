@@ -63,6 +63,24 @@
       "label": "Piper source folder",
       "default": "",
       "description": "Optional folder used to copy local Piper assets into the plugin runtime"
+    },
+    "selectedProvider": {
+      "type": "string",
+      "label": "Selected voice engine",
+      "default": "fast-qwen",
+      "description": "Plugin-owned voice engine selection"
+    },
+    "selectedVoice": {
+      "type": "string",
+      "label": "Selected voice",
+      "default": "",
+      "description": "Plugin-owned voice id"
+    },
+    "voiceDescription": {
+      "type": "textarea",
+      "label": "Voice description",
+      "default": "",
+      "description": "Plugin-owned voice style text"
     }
   }
 }

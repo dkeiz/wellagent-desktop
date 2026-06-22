@@ -1,6 +1,7 @@
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
+const { buildRuntimePaths } = require('./runtime-paths');
 
 /**
  * BackendEventBus — Central event relay for the autonomous agent architecture.
@@ -27,7 +28,7 @@ class BackendEventBus extends EventEmitter {
         this._maxLogSize = 200;
 
         // Behavior prompt path
-        this._notifyPromptPath = options.notifyPromptPath || path.join(__dirname, '../../agentin/prompts/templates/background-notify.md');
+        this._notifyPromptPath = options.notifyPromptPath || buildRuntimePaths(options).backgroundNotifyPromptPath;
 
         Object.defineProperty(this, 'mainWindow', {
             configurable: true,

@@ -16,7 +16,14 @@ function loadElectronApi(rootDir) {
   const sandbox = {
     require: (request) => {
       if (request === 'electron') {
-        return { ipcRenderer };
+        return {
+          contextBridge: {
+            exposeInMainWorld(name, api) {
+              sandbox.window[name] = api;
+            }
+          },
+          ipcRenderer
+        };
       }
       throw new Error(`Unsupported require in renderer sandbox: ${request}`);
     },
@@ -29,7 +36,7 @@ function loadElectronApi(rootDir) {
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox, { filename: 'electron-api.js' });
 
-  return sandbox.window.electronAPI;
+  return sandbox.window.electronBridge || sandbox.window.electronAPI;
 }
 
 function flattenElectronApi(api) {

@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const { buildRuntimePaths } = require('./runtime-paths');
+const { externalWebFetch, localProbeFetch } = require('./network-policy');
 
 /**
  * SessionInitManager — Handles cold start vs warm start detection and
@@ -18,11 +20,15 @@ class SessionInitManager {
         this.COLD_START_THRESHOLD = 8 * 60 * 60 * 1000;
 
         // Paths
-        this.agentinPath = options.agentinPath || path.join(__dirname, '../../agentin');
+        const runtimePaths = options.runtimePaths || buildRuntimePaths({
+            ...options,
+            agentinRoot: options.agentinPath || options.agentinRoot
+        });
+        this.agentinPath = options.agentinPath || runtimePaths.agentinRoot;
         this.templatePath = options.templatePath || path.join(this.agentinPath, 'prompts/templates/cold-start-discovery.md');
-        this.connectorsDir = options.connectorsDir || path.join(this.agentinPath, 'connectors');
-        this.userProfilePath = options.userProfilePath || path.join(this.agentinPath, 'userabout/memoryaboutuser.md');
-        this.memoryBasePath = options.memoryBasePath || path.join(this.agentinPath, 'memory');
+        this.connectorsDir = options.connectorsDir || runtimePaths.connectorsDir;
+        this.userProfilePath = options.userProfilePath || runtimePaths.userProfilePath;
+        this.memoryBasePath = options.memoryBasePath || runtimePaths.memoryBasePath;
     }
 
     /**
@@ -223,31 +229,23 @@ class SessionInitManager {
 
         // Basic internet check
         try {
-            const http = require('http');
-            await new Promise((resolve, reject) => {
-                const req = http.get('http://www.google.com', { timeout: 5000 }, (res) => {
-                    result.internet = res.statusCode < 400;
-                    resolve();
-                });
-                req.on('error', () => { result.internet = false; resolve(); });
-                req.on('timeout', () => { req.destroy(); result.internet = false; resolve(); });
+            const response = await externalWebFetch('http://www.google.com', { method: 'HEAD' }, {
+                label: 'Internet connectivity check',
+                timeoutMs: 5000
             });
+            result.internet = response.status < 400;
         } catch (e) {
             result.internet = false;
         }
 
         // Check Ollama
         try {
-            const http = require('http');
             const ollamaHost = process.env.OLLAMA_HOST || 'localhost:11434';
-            await new Promise((resolve) => {
-                const req = http.get(`http://${ollamaHost}/api/tags`, { timeout: 3000 }, (res) => {
-                    result.providers.ollama = res.statusCode === 200;
-                    resolve();
-                });
-                req.on('error', () => { result.providers.ollama = false; resolve(); });
-                req.on('timeout', () => { req.destroy(); result.providers.ollama = false; resolve(); });
+            const response = await localProbeFetch(`http://${ollamaHost}/api/tags`, {}, {
+                label: 'Ollama startup probe',
+                timeoutMs: 3000
             });
+            result.providers.ollama = response.status === 200;
         } catch (e) {
             result.providers.ollama = false;
         }

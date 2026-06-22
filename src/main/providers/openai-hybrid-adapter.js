@@ -29,8 +29,16 @@ class OpenAIHybridAdapter extends BaseAdapter {
         return this.codex.getModels(forceRefresh);
     }
 
-    stop() {
-        return this.api.stop() || this.codex.stop();
+    stop(requestId = null) {
+        return this.api.stop(requestId) || this.codex.stop(requestId);
+    }
+
+    get isGenerating() {
+        return this.api.isGenerating || this.codex.isGenerating;
+    }
+
+    getActiveRequestCount() {
+        return this.api.getActiveRequestCount() + this.codex.getActiveRequestCount();
     }
 
     async getCodexStatus() {

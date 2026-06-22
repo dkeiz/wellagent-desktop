@@ -7,13 +7,15 @@ module.exports = {
   async run({ assert, rootDir }) {
     const indexHtml = fs.readFileSync(path.join(rootDir, 'src', 'renderer', 'index.html'), 'utf8');
     const mainPanel = fs.readFileSync(path.join(rootDir, 'src', 'renderer', 'components', 'main-panel.js'), 'utf8');
+    const mainPanelVoice = fs.readFileSync(path.join(rootDir, 'src', 'renderer', 'components', 'main-panel-voice.js'), 'utf8');
     const pluginStudio = fs.readFileSync(path.join(rootDir, 'src', 'renderer', 'components', 'plugin-studio-panel.js'), 'utf8');
+    const ttsWiringSource = `${mainPanel}\n${mainPanelVoice}`;
 
     assert.includes(indexHtml, 'components/tts-text-utils.js', 'Expected renderer to load TTS text utils');
     assert.includes(indexHtml, 'components/tts-controller.js', 'Expected renderer to load TTS controller');
     assert.includes(indexHtml, 'components/plugin-studio-tts-panel.js', 'Expected renderer to load plugin studio TTS helper');
 
-    assert.includes(mainPanel, 'LocalAgentTtsController', 'Expected main panel to delegate playback to the TTS controller');
+    assert.includes(ttsWiringSource, 'LocalAgentTtsController', 'Expected main panel voice path to delegate playback to the TTS controller');
     assert.includes(pluginStudio, 'LocalAgentPluginTtsStudio', 'Expected plugin studio to delegate custom TTS UI');
 
     const watchedFiles = [

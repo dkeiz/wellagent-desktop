@@ -19,6 +19,10 @@ module.exports = {
   async run({ assert, rootDir }) {
     const indexPath = path.join(rootDir, 'src', 'renderer', 'index.html');
     const html = fs.readFileSync(indexPath, 'utf8');
+    const capabilityPanel = fs.readFileSync(
+      path.join(rootDir, 'src', 'renderer', 'components', 'capability-panel.js'),
+      'utf8'
+    );
     const scripts = collectScriptSources(html);
     const required = [
       'components/chart-renderer.js',
@@ -26,7 +30,12 @@ module.exports = {
       'components/main-panel-permissions.js',
       'components/message-formatter.js',
       'components/api-provider-settings.js',
-      'components/main-panel.js'
+      'components/main-panel.js',
+      'components/main-panel-content-viewer-links.js',
+      'components/split-pane.js',
+      'components/content-viewer.js',
+      'components/app-layout-mode.js',
+      'app.js'
     ];
 
     const positions = required.map(scriptPrefix => {
@@ -52,5 +61,16 @@ module.exports = {
         `Expected ${previous.scriptPrefix} to load before ${current.scriptPrefix}`
       );
     }
+
+    assert.equal(
+      capabilityPanel.includes('capability-context-badge'),
+      false,
+      'Expected compact tools UI not to create a visible resolved-context badge'
+    );
+    assert.equal(
+      /textContent\s*=\s*[`'"]Resolved Context/.test(capabilityPanel),
+      false,
+      'Expected compact tools UI not to render resolved context labels'
+    );
   }
 };

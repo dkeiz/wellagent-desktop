@@ -96,6 +96,18 @@
     margin: 0;
 }
 
+.plugin-studio-title-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+#plugin-studio-visibility.active {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
 #plugin-studio-meta {
     margin: 3px 0 0;
     font-size: 0.75rem;
@@ -115,6 +127,70 @@
 }
 
 .plugin-studio-form-tts {
+    gap: 8px;
+}
+
+.plugin-studio-form-telegram {
+    gap: 8px;
+}
+
+.plugin-studio-telegram-toolbar,
+.plugin-studio-telegram-section {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--card-bg);
+    padding: 9px;
+    display: grid;
+    gap: 8px;
+}
+
+.plugin-studio-telegram-chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.plugin-studio-telegram-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    font-size: 0.74rem;
+    color: var(--text-secondary);
+}
+
+.plugin-studio-telegram-section-header {
+    display: grid;
+    gap: 2px;
+}
+
+.plugin-studio-telegram-section-title {
+    font-size: 0.83rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.plugin-studio-telegram-section-sub {
+    font-size: 0.74rem;
+    color: var(--text-secondary);
+}
+
+.plugin-studio-telegram-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px;
+}
+
+.plugin-studio-telegram-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.plugin-studio-telegram-inline-actions {
+    display: grid;
     gap: 8px;
 }
 
@@ -463,6 +539,40 @@
     padding: 6px 8px;
 }
 
+.plugin-studio-field input.plugin-studio-toggle {
+    appearance: none;
+    width: 42px;
+    height: 22px;
+    padding: 0;
+    border-radius: 999px;
+    background: var(--bg-secondary);
+    cursor: pointer;
+    position: relative;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.plugin-studio-field input.plugin-studio-toggle::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--text-secondary);
+    transition: transform 0.15s, background 0.15s;
+}
+
+.plugin-studio-field input.plugin-studio-toggle:checked {
+    border-color: var(--primary-color);
+    background: var(--primary-color);
+}
+
+.plugin-studio-field input.plugin-studio-toggle:checked::after {
+    transform: translateX(20px);
+    background: #fff;
+}
+
 .plugin-studio-field textarea {
     min-height: 76px;
     resize: vertical;
@@ -496,6 +606,7 @@
     }
 }
 
+#plugin-studio-visibility.is-busy,
 #plugin-studio-toggle.is-busy,
 #plugin-studio-discover.is-busy,
 #plugin-studio-save.is-busy {
@@ -504,6 +615,7 @@
     opacity: 0.85;
 }
 
+#plugin-studio-visibility.is-busy::before,
 #plugin-studio-toggle.is-busy::before,
 #plugin-studio-discover.is-busy::before,
 #plugin-studio-save.is-busy::before {

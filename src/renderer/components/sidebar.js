@@ -4,6 +4,10 @@ class Sidebar {
         this.toolActivity = [];
         this.unseenToolCount = 0;
         this.currentSessionId = null;
+        this.sessionMetaById = new Map();
+        this.agentMetaById = new Map();
+        this.pendingSessionMetaIds = new Set();
+        this.pendingAgentMetaIds = new Set();
         this.selectedDate = null;
         this.settingsDock = null;
         this.settingsFlyout = null;
@@ -20,35 +24,29 @@ class Sidebar {
         this.setupSettingsDock();
         this.updateToolIndicators();
     }
-
     resetUnseenToolCount() {
         this.unseenToolCount = 0;
         this.updateToolIndicators();
     }
-
     setupCollapsibleSections() {
         document.querySelectorAll('.collapsible-section').forEach(section => {
             const header = section.querySelector('.section-header');
-            const content = section.querySelector('.section-content');
             const toggleIcon = header.querySelector('.toggle-icon');
-
             header.addEventListener('click', () => {
                 section.classList.toggle('collapsed');
-                toggleIcon.textContent = section.classList.contains('collapsed') ? '◀' : '▶';
-
+                header.setAttribute('aria-expanded', String(!section.classList.contains('collapsed')));
                 const sectionId = section.getAttribute('data-section');
                 localStorage.setItem(`section-${sectionId}-collapsed`, section.classList.contains('collapsed'));
             });
-
             const sectionId = section.getAttribute('data-section');
             const isCollapsed = localStorage.getItem(`section-${sectionId}-collapsed`) === 'true';
             if (isCollapsed) {
                 section.classList.add('collapsed');
-                toggleIcon.textContent = '◀';
             }
+            header.setAttribute('aria-expanded', String(!isCollapsed));
+            toggleIcon?.setAttribute('aria-hidden', 'true');
         });
     }
-
     initializeEvents() {
         const navButtons = document.querySelectorAll('.nav-btn');
         navButtons.forEach(button => {
@@ -126,9 +124,9 @@ class Sidebar {
 
     async loadMCPTools() {
         try {
-            const tools = await window.electronAPI.getMCPTools();
-            const customTools = await window.electronAPI.getCustomTools?.() || [];
             const permissionContext = this.getPermissionContext();
+            const tools = await window.electronAPI.getMCPTools(permissionContext);
+            const customTools = await window.electronAPI.getCustomTools?.() || [];
             const resolvedContext = await window.electronAPI.permissions?.getContext?.(permissionContext) || null;
             // Use capability groups as the single source of truth for group info
             const capabilityGroups = await window.electronAPI.capability?.getGroups?.() || [];
@@ -198,6 +196,10 @@ class Sidebar {
                 }
             });
 
+            if (tools.length === 0) {
+                container.innerHTML = '<div class="no-activity">No tools are visible in this chat context.</div>';
+            }
+
             // Render groups
             const renderOrder = [...groupOrder, 'custom'];
             renderOrder.forEach(groupId => {
@@ -221,8 +223,8 @@ class Sidebar {
                     font-size: 0.82rem; font-weight: 600; color: ${groupEnabled ? 'inherit' : '#9ca3af'};
                 `;
                 groupHeader.innerHTML = `
-                    <span>${groupInfo.icon}</span>
-                    <span>${groupInfo.name}</span>
+                    <span>${this.escapeHtml(groupInfo.icon)}</span>
+                    <span>${this.escapeHtml(groupInfo.name)}</span>
                     ${groupEnabled ? '' : '<span style="margin-left:auto;font-size:0.75rem;">🔒 disabled</span>'}
                 `;
                 container.appendChild(groupHeader);
@@ -247,26 +249,25 @@ class Sidebar {
                     toolElement.innerHTML = `
                         <div class="tool-card-header">
                             <h4 class="tool-card-name">
-                                ${isCustom ? '🔧 ' : ''}${tool.name}
+                                ${isCustom ? '🔧 ' : ''}${this.escapeHtml(tool.name)}
                                 ${!groupEnabled ? '<span class="tool-disabled-badge" title="Group disabled">🔒</span>' : ''}
                             </h4>
                             <div style="display: flex; gap: 0.5rem; align-items: center;">
-                                ${isCustom ? '<button class="delete-tool-btn" data-tool="' + tool.name + '" title="Delete custom tool">🗑️</button>' : ''}
+                                ${isCustom ? '<button class="delete-tool-btn" title="Delete custom tool">🗑️</button>' : ''}
                                 <label class="tool-toggle" title="${!groupEnabled ? 'Enable group to allow this tool' : ''}">
-                                    <input type="checkbox" class="tool-active-checkbox"
-                                           data-tool="${tool.name}"
-                                           data-group="${gi?.id || ''}"
-                                           data-group-enabled="${groupEnabled}"
-                                           ${isActive ? 'checked' : ''}>
+                                    <input type="checkbox" class="tool-active-checkbox" ${isActive ? 'checked' : ''}>
                                     <span class="toggle-slider"></span>
                                 </label>
                             </div>
                         </div>
-                        <div class="tool-card-description">${tool.description}</div>
-                        ${tool.inputSchema?.properties ? `<div class="tool-card-params">Params: ${Object.keys(tool.inputSchema.properties).join(', ')}</div>` : ''}
+                        <div class="tool-card-description">${this.escapeHtml(tool.description || '')}</div>
+                        ${tool.inputSchema?.properties ? `<div class="tool-card-params">Params: ${this.escapeHtml(Object.keys(tool.inputSchema.properties).join(', '))}</div>` : ''}
                     `;
 
                     const checkbox = toolElement.querySelector('.tool-active-checkbox');
+                    checkbox.dataset.tool = tool.name;
+                    checkbox.dataset.group = gi?.id || '';
+                    checkbox.dataset.groupEnabled = String(groupEnabled);
                     checkbox.addEventListener('change', async (e) => {
                         const tName = e.target.dataset.tool;
                         const active = e.target.checked;
@@ -307,6 +308,7 @@ class Sidebar {
 
                     const deleteBtn = toolElement.querySelector('.delete-tool-btn');
                     if (deleteBtn) {
+                        deleteBtn.dataset.tool = tool.name;
                         deleteBtn.addEventListener('click', async (e) => {
                             e.stopPropagation();
                             const tName = e.currentTarget.dataset.tool;
@@ -340,9 +342,9 @@ class Sidebar {
                     toolElement.dataset.toolName = tool.name;
                     toolElement.innerHTML = `
                         <div class="tool-card-header">
-                            <h4 class="tool-card-name">${tool.name}</h4>
+                            <h4 class="tool-card-name">${this.escapeHtml(tool.name)}</h4>
                         </div>
-                        <div class="tool-card-description">${tool.description}</div>
+                        <div class="tool-card-description">${this.escapeHtml(tool.description || '')}</div>
                     `;
                     container.appendChild(toolElement);
                 });
@@ -360,7 +362,7 @@ class Sidebar {
 
             // Update tool tester dropdown
             if (toolSelect) {
-                toolSelect.innerHTML = '<option value="">Select a tool...</option>';
+                toolSelect.innerHTML = `<option value="">${tools.length > 0 ? 'Select a tool...' : 'No visible tools in this context'}</option>`;
                 tools.forEach(tool => {
                     const option = document.createElement('option');
                     option.value = tool.name;
@@ -398,6 +400,7 @@ class Sidebar {
     isGroupEnabledForContext(groupId, groupInfo, resolvedContext) {
         if (!resolvedContext?.groups) return groupInfo?.enabled ?? true;
         if (groupId === 'files') return String(resolvedContext.groups.files || 'off') !== 'off';
+        if (groupId === 'terminal') return String(resolvedContext.groups.terminal || 'off') !== 'off';
         if (Object.prototype.hasOwnProperty.call(resolvedContext.groups, groupId)) return resolvedContext.groups[groupId] === true;
         return groupInfo?.enabled ?? true;
     }
@@ -424,7 +427,7 @@ class Sidebar {
     async loadWorkflows() {
         try {
             const workflows = await window.electronAPI.getWorkflows?.() || [];
-            const tools = await window.electronAPI.getMCPTools?.() || [];
+            const tools = await window.electronAPI.getMCPTools?.(this.getPermissionContext()) || [];
             const container = document.getElementById('workflows-container');
             const toolSelect = document.getElementById('workflow-tool-select');
             const selectedToolsDiv = document.getElementById('selected-workflow-tools');
@@ -473,16 +476,16 @@ class Sidebar {
 
                 workflowCard.innerHTML = `
                     <div class="workflow-card-header">
-                        <h4 class="workflow-name">🔄 ${workflow.name}</h4>
+                        <h4 class="workflow-name">🔄 ${this.escapeHtml(workflow.name || '')}</h4>
                         <div class="workflow-actions">
                             <button class="run-workflow-btn icon-btn" data-id="${workflow.id}" title="Run Workflow">▶️</button>
                             <button class="delete-workflow-btn icon-btn" data-id="${workflow.id}" title="Delete">🗑️</button>
                         </div>
                     </div>
-                    <div class="workflow-description">${workflow.description || 'No description'}</div>
+                    <div class="workflow-description">${this.escapeHtml(workflow.description || 'No description')}</div>
                     <div class="workflow-tools">
                         <span class="tools-label">Tools:</span>
-                        ${toolChain.map(t => `<span class="workflow-tool-badge">${t.tool || t}</span>`).join(' → ')}
+                        ${toolChain.map(t => `<span class="workflow-tool-badge">${this.escapeHtml(t.tool || t)}</span>`).join(' → ')}
                     </div>
                     <div class="workflow-stats">
                         <span>Runs: ${workflow.execution_count || 0}</span>
@@ -680,29 +683,38 @@ class Sidebar {
     }
 
     setupSettingsDock() {
-        this.settingsDock = document.getElementById('settings-dock');
-        this.settingsFlyout = document.getElementById('settings-flyout');
+        this.settingsDocks = [
+            document.getElementById('settings-dock'),
+            document.getElementById('statusbar-settings-dock')
+        ].filter(Boolean);
 
-        if (!this.settingsDock || !this.settingsFlyout) {
+        this.settingsFlyouts = [
+            document.getElementById('settings-flyout'),
+            document.getElementById('statusbar-settings-flyout')
+        ].filter(Boolean);
+
+        if (this.settingsDocks.length === 0 || this.settingsFlyouts.length === 0) {
             return;
         }
 
-        this.settingsDock.addEventListener('click', () => {
-            if (this.isSettingsFlyoutOpen) {
-                this.closeSettingsFlyout();
-            } else {
-                this.openSettingsFlyout();
-            }
-        });
+        this.settingsDocks.forEach(dock => {
+            dock.addEventListener('click', () => {
+                if (this.isSettingsFlyoutOpen) {
+                    this.closeSettingsFlyout();
+                } else {
+                    this.openSettingsFlyout();
+                }
+            });
 
-        this.settingsDock.addEventListener('keydown', (event) => {
-            if (event.key !== 'Enter' && event.key !== ' ') return;
-            event.preventDefault();
-            if (this.isSettingsFlyoutOpen) {
-                this.closeSettingsFlyout();
-            } else {
-                this.openSettingsFlyout();
-            }
+            dock.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                if (this.isSettingsFlyoutOpen) {
+                    this.closeSettingsFlyout();
+                } else {
+                    this.openSettingsFlyout();
+                }
+            });
         });
 
         document.addEventListener('pointerdown', this.handleSettingsPointerDown);
@@ -711,32 +723,58 @@ class Sidebar {
     }
 
     openSettingsFlyout() {
-        if (!this.settingsDock || !this.settingsFlyout) return;
         this.isSettingsFlyoutOpen = true;
-        this.settingsFlyout.classList.add('open');
-        this.settingsFlyout.setAttribute('aria-hidden', 'false');
-        this.settingsDock.setAttribute('aria-expanded', 'true');
+
+        const layoutMode = document.querySelector('.app-container')?.getAttribute('data-layout-mode') || 'desktop';
+        const activeDock = layoutMode === 'desktop'
+            ? document.getElementById('statusbar-settings-dock')
+            : document.getElementById('settings-dock');
+        const activeFlyout = layoutMode === 'desktop'
+            ? document.getElementById('statusbar-settings-flyout')
+            : document.getElementById('settings-flyout');
+
+        this.settingsFlyouts.forEach(f => {
+            f.classList.remove('open');
+            f.setAttribute('aria-hidden', 'true');
+            f.style.display = 'none';
+        });
+        this.settingsDocks.forEach(d => d.setAttribute('aria-expanded', 'false'));
+
+        if (activeFlyout && activeDock) {
+            activeFlyout.classList.add('open');
+            activeFlyout.setAttribute('aria-hidden', 'false');
+            activeFlyout.style.display = '';
+            activeDock.setAttribute('aria-expanded', 'true');
+        }
     }
 
     closeSettingsFlyout() {
-        if (!this.settingsDock || !this.settingsFlyout) return;
         this.isSettingsFlyoutOpen = false;
-        this.settingsFlyout.classList.remove('open');
-        this.settingsFlyout.setAttribute('aria-hidden', 'true');
-        this.settingsDock.setAttribute('aria-expanded', 'false');
+        this.settingsFlyouts.forEach(f => {
+            f.classList.remove('open');
+            f.setAttribute('aria-hidden', 'true');
+            f.style.display = 'none';
+        });
+        this.settingsDocks.forEach(d => d.setAttribute('aria-expanded', 'false'));
     }
 
     handleSettingsPointerDown(event) {
-        if (!this.isSettingsFlyoutOpen || !this.settingsDock || !this.settingsFlyout) return;
+        if (!this.isSettingsFlyoutOpen) return;
         const target = event.target;
-        if (this.settingsFlyout.contains(target) || this.settingsDock.contains(target)) return;
+        const isClickInsideAnyFlyout = this.settingsFlyouts.some(f => f.contains(target));
+        const isClickInsideAnyDock = this.settingsDocks.some(d => d.contains(target));
+        if (isClickInsideAnyFlyout || isClickInsideAnyDock) return;
         this.closeSettingsFlyout();
     }
 
     handleSettingsKeyDown(event) {
         if (event.key === 'Escape' && this.isSettingsFlyoutOpen) {
             this.closeSettingsFlyout();
-            this.settingsDock?.focus();
+            const layoutMode = document.querySelector('.app-container')?.getAttribute('data-layout-mode') || 'desktop';
+            const activeDock = layoutMode === 'desktop'
+                ? document.getElementById('statusbar-settings-dock')
+                : document.getElementById('settings-dock');
+            activeDock?.focus();
         }
     }
 
@@ -746,16 +784,277 @@ class Sidebar {
         }
     }
 
+    normalizeActivityContextId(value) {
+        const normalized = String(value ?? '').trim();
+        return normalized || '';
+    }
+
+    normalizeActivityLabel(value) {
+        return String(value ?? '').replace(/\s+/g, ' ').trim();
+    }
+
+    truncateActivityLabel(value, maxLength = 40) {
+        const normalized = this.normalizeActivityLabel(value);
+        if (!normalized || normalized.length <= maxLength) {
+            return normalized;
+        }
+        return `${normalized.slice(0, Math.max(1, maxLength - 1))}\u2026`;
+    }
+
+    isPlaceholderSessionLabel(value) {
+        const normalized = this.normalizeActivityLabel(value).toLowerCase();
+        return normalized === ''
+            || normalized === 'chat'
+            || normalized === 'new chat'
+            || normalized === 'conversation'
+            || normalized === 'agent chat'
+            || normalized === 'private chat';
+    }
+
+    rememberSessionMeta(session = {}) {
+        const id = this.normalizeActivityContextId(session.id ?? session.sessionId);
+        if (!id) return false;
+
+        const previous = this.sessionMetaById.get(id) || {};
+        const title = this.normalizeActivityLabel(session.title ?? previous.title);
+        const firstMessage = this.normalizeActivityLabel(
+            session.first_message ?? session.firstMessage ?? previous.firstMessage
+        );
+        const nextAgentId = session.agent_id ?? session.agentId ?? previous.agentId ?? null;
+        const agentId = nextAgentId === null || nextAgentId === undefined
+            ? null
+            : String(nextAgentId).trim();
+        const next = {
+            id,
+            title,
+            firstMessage,
+            agentId,
+            private: session.private === true || previous.private === true
+        };
+        const changed = previous.title !== next.title
+            || previous.firstMessage !== next.firstMessage
+            || this.normalizeActivityContextId(previous.agentId) !== this.normalizeActivityContextId(next.agentId)
+            || Boolean(previous.private) !== Boolean(next.private);
+
+        this.sessionMetaById.set(id, next);
+        return changed;
+    }
+
+    rememberAgentMeta(agent = {}) {
+        const id = this.normalizeActivityContextId(agent.id ?? agent.agentId);
+        if (!id) return false;
+
+        const previous = this.agentMetaById.get(id) || {};
+        const next = {
+            id,
+            name: this.normalizeActivityLabel(agent.name ?? previous.name),
+            icon: this.normalizeActivityLabel(agent.icon ?? previous.icon)
+        };
+        const changed = previous.name !== next.name || previous.icon !== next.icon;
+
+        this.agentMetaById.set(id, next);
+        return changed;
+    }
+
+    resolvePanelTab(sessionId) {
+        const normalizedSessionId = this.normalizeActivityContextId(sessionId);
+        if (!normalizedSessionId) return null;
+
+        const panel = window.app?.mainPanel || window.mainPanel;
+        if (!panel?.chatTabs) return null;
+
+        const tabKey = typeof this.resolvePanelTabKey === 'function'
+            ? this.resolvePanelTabKey(panel, sessionId)
+            : [...panel.chatTabs.keys()].find((key) => String(key) === normalizedSessionId) ?? null;
+
+        if (tabKey === null) return null;
+        return panel.chatTabs.get(tabKey) || null;
+    }
+
+    captureSessionMetaFromPanel(sessionId) {
+        const normalizedSessionId = this.normalizeActivityContextId(sessionId);
+        if (!normalizedSessionId) return false;
+
+        const tab = this.resolvePanelTab(sessionId);
+        if (!tab) return false;
+
+        return this.rememberSessionMeta({
+            id: normalizedSessionId,
+            title: tab.title || '',
+            agent_id: tab.agentId ?? null
+        });
+    }
+
+    resolveToolActivityAgentId(item = {}) {
+        const directAgentId = this.normalizeActivityContextId(item.agentId);
+        if (directAgentId) return directAgentId;
+
+        const sessionId = this.normalizeActivityContextId(item.sessionId);
+        if (!sessionId) return '';
+
+        const sessionMeta = this.sessionMetaById.get(sessionId) || null;
+        return this.normalizeActivityContextId(sessionMeta?.agentId);
+    }
+
+    formatToolActivitySessionContext(sessionId, { truncateLabel = 0 } = {}) {
+        const normalizedSessionId = this.normalizeActivityContextId(sessionId);
+        if (!normalizedSessionId) return '';
+
+        this.captureSessionMetaFromPanel(normalizedSessionId);
+        const meta = this.sessionMetaById.get(normalizedSessionId) || {};
+        const rawLabel = meta.firstMessage || (this.isPlaceholderSessionLabel(meta.title) ? '' : meta.title);
+        const label = truncateLabel > 0
+            ? this.truncateActivityLabel(rawLabel, truncateLabel)
+            : this.normalizeActivityLabel(rawLabel);
+
+        if (label) {
+            return `Chat: ${label} [sessionId: ${normalizedSessionId}]`;
+        }
+        return `sessionId: ${normalizedSessionId}`;
+    }
+
+    formatToolActivityAgentContext(agentId, { truncateLabel = 0 } = {}) {
+        const normalizedAgentId = this.normalizeActivityContextId(agentId);
+        if (!normalizedAgentId) return '';
+
+        const meta = this.agentMetaById.get(normalizedAgentId) || {};
+        const rawLabel = this.normalizeActivityLabel(meta.name);
+        const label = truncateLabel > 0
+            ? this.truncateActivityLabel(rawLabel, truncateLabel)
+            : rawLabel;
+
+        if (label) {
+            return `Agent: ${label} [agentId: ${normalizedAgentId}]`;
+        }
+        return `agentId: ${normalizedAgentId}`;
+    }
+
+    getToolActivityContextLines(item = {}, { truncateLabel = 0 } = {}) {
+        const lines = [];
+        const sessionLine = this.formatToolActivitySessionContext(item.sessionId, { truncateLabel });
+        const agentLine = this.formatToolActivityAgentContext(
+            this.resolveToolActivityAgentId(item),
+            { truncateLabel }
+        );
+
+        if (sessionLine) lines.push(sessionLine);
+        if (agentLine) lines.push(agentLine);
+        return lines;
+    }
+
+    renderToolActivityContextSummary(item = {}) {
+        const lines = this.getToolActivityContextLines(item, { truncateLabel: 34 });
+        if (lines.length === 0) return '';
+
+        return `
+            <div class="tool-context-row">
+                ${lines.map((line) => `<span class="tool-context-pill">${this.escapeHtml(line)}</span>`).join('')}
+            </div>
+        `;
+    }
+
+    renderToolActivityContextDetails(item = {}) {
+        const lines = this.getToolActivityContextLines(item);
+        if (lines.length === 0) return '';
+
+        return `
+            <div class="tool-section">
+                <div class="tool-section-label">Context:</div>
+                <div class="tool-context-details">
+                    ${lines.map((line) => `<div class="tool-context-line">${this.escapeHtml(line)}</div>`).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    async ensureSessionMeta(sessionId) {
+        const normalizedSessionId = this.normalizeActivityContextId(sessionId);
+        if (!normalizedSessionId) return false;
+
+        this.captureSessionMetaFromPanel(normalizedSessionId);
+        if (this.pendingSessionMetaIds.has(normalizedSessionId) || !window.electronAPI?.getChatSessionMeta) {
+            return false;
+        }
+
+        this.pendingSessionMetaIds.add(normalizedSessionId);
+        try {
+            const meta = await window.electronAPI.getChatSessionMeta(sessionId);
+            if (!meta) return false;
+            return this.rememberSessionMeta(meta);
+        } catch (error) {
+            console.warn(`Failed to resolve session label for ${normalizedSessionId}:`, error);
+            return false;
+        } finally {
+            this.pendingSessionMetaIds.delete(normalizedSessionId);
+        }
+    }
+
+    async ensureAgentMeta(agentId) {
+        const normalizedAgentId = this.normalizeActivityContextId(agentId);
+        if (!normalizedAgentId) return false;
+
+        const current = this.agentMetaById.get(normalizedAgentId);
+        if (current?.name || this.pendingAgentMetaIds.has(normalizedAgentId) || !window.electronAPI?.agents?.get) {
+            return false;
+        }
+
+        this.pendingAgentMetaIds.add(normalizedAgentId);
+        try {
+            const agent = await window.electronAPI.agents.get(agentId);
+            if (!agent) return false;
+            return this.rememberAgentMeta(agent);
+        } catch (error) {
+            console.warn(`Failed to resolve agent label for ${normalizedAgentId}:`, error);
+            return false;
+        } finally {
+            this.pendingAgentMetaIds.delete(normalizedAgentId);
+        }
+    }
+
+    async hydrateToolActivityContext(item = {}) {
+        let changed = false;
+
+        changed = this.captureSessionMetaFromPanel(item.sessionId) || changed;
+        changed = (await this.ensureSessionMeta(item.sessionId)) || changed;
+
+        const resolvedAgentId = this.resolveToolActivityAgentId(item);
+        if (!item.agentId && resolvedAgentId) {
+            item.agentId = resolvedAgentId;
+            changed = true;
+        }
+
+        changed = (await this.ensureAgentMeta(item.agentId)) || changed;
+
+        if (changed) {
+            this.updateToolIndicators();
+        }
+    }
+
     setupToolListeners() {
+        document.addEventListener('chat-tab-switched', (event) => {
+            const sessionId = event?.detail?.sessionId ?? null;
+            if (this.captureSessionMetaFromPanel(sessionId) && this.toolActivity.length > 0) {
+                this.updateToolIndicators();
+            }
+        });
+
         window.electronAPI.onToolUpdate((event, data) => {
-            this.toolActivity.unshift({
+            const activity = {
                 tool: data.toolName,
-                time: new Date().toLocaleTimeString(),
+                toolCallId: data.toolCallId || null,
+                timestamp: data.timestamp || new Date().toISOString(),
+                time: new Date(data.timestamp || Date.now()).toLocaleTimeString(),
                 success: data.success,
+                sessionId: data.sessionId ?? null,
+                agentId: data.agentId ?? null,
+                source: data.source || null,
                 params: data.params || {},
                 result: data.result,
                 error: data.error
-            });
+            };
+
+            this.captureSessionMetaFromPanel(activity.sessionId);
+            this.toolActivity.unshift(activity);
 
             // Keep only last 10 activities
             this.toolActivity = this.toolActivity.slice(0, 10);
@@ -763,11 +1062,13 @@ class Sidebar {
             // Increment unseen tool count
             this.unseenToolCount++;
             this.updateToolIndicators();
+            void this.hydrateToolActivityContext(activity);
         });
 
         // Listen for conversation updates to refresh chat list
-        window.electronAPI.onConversationUpdate(() => {
-            this.loadChatSessions();
+        window.electronAPI.onConversationUpdate((event, data = {}) => {
+            this.captureSessionMetaFromPanel(data.sessionId ?? null);
+            void this.loadChatSessions();
         });
     }
 
@@ -813,16 +1114,28 @@ class Sidebar {
                 const resultJson = item.success
                     ? JSON.stringify(item.result, null, 2)
                     : item.error || 'Unknown error';
+                const contextSummaryHtml = this.renderToolActivityContextSummary(item);
+                const contextDetailsHtml = this.renderToolActivityContextDetails(item);
 
                 return `
                 <div class="tool-activity-item ${item.success ? 'success' : 'error'}${isSearxngSearch && item.success ? ' searxng-complete' : ''}" data-index="${index}">
                     <div class="tool-header" onclick="window.sidebar.toggleToolDetails(${index})">
-                        <span class="tool-expand">▶</span>
-                        <strong>${item.tool}</strong>
-                        <span class="tool-time">${item.time}</span>
-                        <span class="tool-status-badge">${item.success ? '✓' : '✗'}</span>
+                        <span class="tool-expand">
+                            <svg class="arrow-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </span>
+                        <div class="tool-header-main">
+                            <div class="tool-header-top">
+                                <strong>${this.escapeHtml(item.tool)}</strong>
+                                <span class="tool-time">${this.escapeHtml(item.time)}</span>
+                                <span class="tool-status-badge">${item.success ? '✓' : '✗'}</span>
+                            </div>
+                            ${contextSummaryHtml}
+                        </div>
                     </div>
                     <div class="tool-details" style="display: none;">
+                        ${contextDetailsHtml}
                         <div class="tool-section">
                             <div class="tool-section-label">Parameters:</div>
                             <pre class="tool-json">${this.escapeHtml(paramsJson)}</pre>
@@ -843,158 +1156,28 @@ class Sidebar {
         if (!item) return;
 
         const details = item.querySelector('.tool-details');
-        const expand = item.querySelector('.tool-expand');
 
         if (details.style.display === 'none') {
             details.style.display = 'block';
-            expand.textContent = '▼';
+            item.classList.add('expanded');
         } else {
             details.style.display = 'none';
-            expand.textContent = '▶';
+            item.classList.remove('expanded');
         }
     }
 
     escapeHtml(text) {
         const div = document.createElement('div');
-        div.textContent = text;
+        div.textContent = String(text ?? '');
         return div.innerHTML;
     }
 
-    async loadChatSessions(date = null) {
-        try {
-            // Always get last 6, unless date is specified and has more than 6
-            let sessions = await window.electronAPI.getChatSessions(null, 6);
-
-            if (date) {
-                const dateSessions = await window.electronAPI.getChatSessions(date, 100);
-                if (dateSessions.length > 0) {
-                    sessions = dateSessions.slice(0, 6);
-                }
-            }
-            const container = document.getElementById('chat-sessions-list');
-
-            if (!container) return;
-            container.replaceChildren();
-
-            if (sessions.length === 0) {
-                const empty = document.createElement('div');
-                empty.className = 'no-sessions';
-                empty.textContent = 'No chats';
-                container.appendChild(empty);
-                return;
-            }
-
-            sessions.forEach((session) => {
-                const preview = session.first_message ?
-                    (session.first_message.length > 15 ? session.first_message.substring(0, 15) + '...' : session.first_message) :
-                    'Empty';
-                const time = new Date(session.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-
-                const item = document.createElement('div');
-                item.className = 'chat-session-compact nav-btn';
-                item.dataset.sessionId = String(session.id);
-                item.title = session.first_message || 'Empty chat';
-
-                const timeEl = document.createElement('span');
-                timeEl.className = 'session-time';
-                timeEl.textContent = time;
-                item.appendChild(timeEl);
-
-                const previewEl = document.createElement('span');
-                previewEl.className = 'session-preview';
-                previewEl.textContent = preview;
-                item.appendChild(previewEl);
-
-                const deleteBtn = document.createElement('button');
-                deleteBtn.className = 'delete-session-btn';
-                deleteBtn.dataset.sessionId = String(session.id);
-                deleteBtn.title = 'Delete chat';
-                deleteBtn.textContent = '×';
-                item.appendChild(deleteBtn);
-
-                const rawSessionId = item.dataset.sessionId;
-                const sessionId = /^\d+$/.test(rawSessionId) ? parseInt(rawSessionId, 10) : rawSessionId;
-
-                // Click on item (not delete button)
-                item.addEventListener('click', (e) => {
-                    if (e.target.classList.contains('delete-session-btn')) {
-                        return;
-                    }
-                    this.loadSession(sessionId);
-                });
-
-                // Delete button
-                deleteBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.deleteSession(sessionId);
-                });
-
-                container.appendChild(item);
-            });
-        } catch (error) {
-            console.error('Error loading chat sessions:', error);
-        }
-    }
-
-    async loadSession(sessionId) {
-        try {
-            // Route through MainPanel's tab system for proper tab management
-            if (window.app && window.app.mainPanel) {
-                const mainPanel = window.app.mainPanel;
-
-                // Check if this tab is already open — just switch to it
-                if (mainPanel.chatTabs.has(sessionId)) {
-                    await mainPanel.switchTab(sessionId);
-                    this.switchTab('chat');
-                    return;
-                }
-
-                // Save current tab messages before switching
-                mainPanel.saveCurrentTabMessages();
-
-                // Create a new tab for this session
-                mainPanel.chatTabs.set(sessionId, {
-                    title: `Chat`,
-                    messagesHTML: '',
-                    isSending: false,
-                    loadingId: null,
-                    uiMode: 'plugin',
-                    uiPluginId: null,
-                    needsReload: false,
-                    hasUnread: false,
-                    interruptionState: null
-                });
-
-                mainPanel.activeTabId = sessionId;
-                await mainPanel.loadTabConversations(sessionId);
-                await mainPanel.autoTitleTab(sessionId);
-                mainPanel.renderTabs();
-                mainPanel.saveOpenTabIds();
-
-                await window.electronAPI.switchChatSession(sessionId);
-                await mainPanel.calculateContextUsage();
-            }
-
-            // Switch to chat tab in sidebar
-            this.switchTab('chat');
-        } catch (error) {
-            console.error('Error loading session:', error);
-        }
-    }
-
-    async deleteSession(sessionId) {
-        if (confirm('Delete this chat? This cannot be undone.')) {
-            try {
-                await window.electronAPI.deleteChatSession(sessionId);
-                await this.loadChatSessions();
-            } catch (error) {
-                console.error('Error deleting session:', error);
-            }
-        }
-    }
 }
+
+Object.assign(Sidebar.prototype, window.SidebarChatSessionMethods || {});
 
 // Initialize sidebar when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     window.sidebar = new Sidebar();
 });
+

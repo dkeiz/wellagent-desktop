@@ -29,6 +29,9 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+
 import uvicorn
 import psutil
 
@@ -40,6 +43,13 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+def _enforce_electron_parent() -> None:
+    """Reject standalone server starts outside the Electron application runtime."""
+    if os.environ.get("LOCALAGENT_VOICE_BACKEND_PARENT") == "electron-app":
+        return
+    raise RuntimeError("Voice backend may only be started by the Electron application runtime.")
 
 
 def _enforce_gpu_only_startup() -> None:
@@ -251,6 +261,7 @@ def _port_preflight(port: int, kill_port: bool) -> None:
 
 def main():
     """Main entry point."""
+    _enforce_electron_parent()
     args = parse_args()
     
     # Set logging level

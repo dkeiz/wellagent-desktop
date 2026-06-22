@@ -1,12 +1,22 @@
 /* Chat Tab Bar */
+:root {
+    --top-tabbar-height: 34px;
+    --top-tabbar-padding: 4px 10px;
+    --top-tab-height: 26px;
+    --top-tab-padding-x: 9px;
+    --top-tab-gap: 2px;
+    --top-tab-font-size: var(--text-sm);
+    --top-tab-radius: var(--radius-sm);
+}
+
 .chat-tabs-bar {
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    padding: var(--space-2) var(--space-3);
+    padding: var(--top-tabbar-padding);
     background: var(--bg-secondary, #f0f0f0);
     border-bottom: 1px solid var(--border-color, #ddd);
-    min-height: var(--control-h-md);
+    min-height: var(--top-tabbar-height);
     overflow-x: auto;
     scrollbar-width: thin;
     flex-shrink: 0;
@@ -15,7 +25,7 @@
 .chat-tabs-strip {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: var(--top-tab-gap);
     min-width: 0;
     flex: 1;
     overflow: hidden;
@@ -35,17 +45,17 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    min-height: var(--control-h-md);
-    padding: 0 11px;
+    min-height: var(--top-tab-height);
+    padding: 0 var(--top-tab-padding-x);
     background: transparent;
     border: 1px solid transparent;
-    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    border-radius: var(--top-tab-radius) var(--top-tab-radius) 0 0;
     cursor: pointer;
-    font-size: var(--text-sm);
+    font-size: var(--top-tab-font-size);
     color: var(--text-secondary, #888);
     white-space: nowrap;
-    max-width: 178px;
-    min-width: 92px;
+    max-width: 168px;
+    min-width: 84px;
     transition: all 0.15s ease;
     position: relative;
     user-select: none;
@@ -184,11 +194,11 @@
 
 /* New Chat Button (in tab bar) */
 .chat-tab-new {
-    width: var(--control-h-sm);
-    height: var(--control-h-sm);
+    width: var(--top-tab-height);
+    height: var(--top-tab-height);
     border: 1px dashed var(--border-color, #ccc);
     background: none;
-    border-radius: var(--radius-sm);
+    border-radius: var(--top-tab-radius);
     cursor: pointer;
     font-size: 16px;
     color: var(--text-secondary, #999);
@@ -209,7 +219,7 @@
 .chat-tabs-list {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: var(--top-tab-gap);
     flex: 0 1 auto;
     overflow-x: auto;
     scrollbar-width: none;

@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { buildRuntimePaths } = require('./runtime-paths');
 let app;
 try { app = require('electron').app; } catch (_) { app = null; }
 
@@ -24,8 +25,7 @@ try { app = require('electron').app; } catch (_) { app = null; }
 class PromptFileManager {
     constructor(db, basePath = null) {
         this.db = db;
-        // Use project's agentin folder or app data
-        this.basePath = basePath || path.join(process.cwd(), 'agentin', 'prompts');
+        this.basePath = basePath || buildRuntimePaths().promptBasePath;
         this.systemPromptPath = path.join(this.basePath, 'system.md');
         this.rulesPath = path.join(this.basePath, 'rules');
         this.watchers = [];

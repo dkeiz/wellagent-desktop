@@ -51,10 +51,62 @@ async function runContract() {
     }, session.id);
     const loadedConversation = await db.loadChatSession(session.id);
     assert.strictEqual(loadedConversation.length, 1, 'Expected persisted conversation to be readable');
-    assert.ok(loadedConversation[0].metadata.includes('"source":"contract"'), 'Expected conversation metadata to persist');
+    assert.strictEqual(loadedConversation[0].metadata?.source, 'contract', 'Expected conversation metadata to persist');
+    await db.addConversation({ role: 'assistant', content: 'reply one' }, session.id);
+    await db.addConversation({ role: 'user', content: 'follow up' }, session.id);
+    const limitedConversation = await db.getConversations(2, session.id);
+    assert.deepStrictEqual(
+      limitedConversation.map((row) => row.content),
+      ['reply one', 'follow up'],
+      'Expected explicit session history limit to return the most recent messages in chronological order'
+    );
+    const currentLimitedConversation = await db.getConversations(2);
+    assert.deepStrictEqual(
+      currentLimitedConversation.map((row) => row.content),
+      ['reply one', 'follow up'],
+      'Expected current-session history limit to honor the requested limit'
+    );
+
+    await db.addCustomTool({
+      name: 'contract_tool',
+      description: 'before',
+      code: 'module.exports = async () => "before";',
+      input_schema: { type: 'object', properties: { before: { type: 'string' } } }
+    });
+    const updatedTool = await db.updateCustomTool('contract_tool', {
+      description: 'after',
+      code: 'module.exports = async () => "after";',
+      input_schema: { type: 'object', required: ['after'], properties: { after: { type: 'string' } } }
+    });
+    assert.equal(updatedTool.description, 'after', 'Expected custom tool description update to persist');
+    assert.equal(updatedTool.code, 'module.exports = async () => "after";', 'Expected custom tool code update to persist');
+    assert.ok(updatedTool.input_schema.includes('"required":["after"]'), 'Expected custom tool schema update to persist');
 
     const currentSession = await db.getCurrentSession();
     assert.strictEqual(currentSession.id, session.id, 'Expected created session to become current');
+
+    const agent = await db.addAgent({ name: 'Sidebar Toggle Agent', type: 'pro', icon: 'S' });
+    assert.strictEqual(agent.visibleInSidebar, true, 'Expected new agents to show in sidebar by default');
+    await db.updateAgent(agent.id, { visible_in_sidebar: 0 });
+    const hiddenAgent = await db.getAgent(agent.id);
+    assert.strictEqual(hiddenAgent.visibleInSidebar, false, 'Expected agent sidebar visibility to map to renderer flag');
+
+    const sessionTodo = await db.addTodo({ task: 'session scoped todo' }, session.id);
+    const otherSession = await db.createChatSession('Other Todo Session');
+    await db.addTodo({ task: 'other scoped todo' }, otherSession.id);
+    assert.deepStrictEqual(
+      (await db.getTodos(session.id)).map(todo => todo.task),
+      ['session scoped todo'],
+      'Expected session-scoped todo query to hide other sessions'
+    );
+    const blockedUpdate = await db.updateTodo(sessionTodo.id, {
+      task: 'session scoped todo',
+      completed: true,
+      priority: 1,
+      due_date: null
+    }, otherSession.id);
+    assert.strictEqual(blockedUpdate.changes, 0, 'Expected cross-session todo update to be ignored');
+    assert.strictEqual((await db.getTodos(session.id))[0].completed, 0, 'Expected original todo to remain open');
 
     safeClose(db);
     db = null;

@@ -18,7 +18,7 @@ const externalSuites = {
     ['node', ['tools/test-ipc-flow-mocked.js']]
   ],
   skin: [
-    ['node', ['src/main/main.js', '--test', '--nowindow']]
+    ['node', ['src/main/main.js', '--skintest', '--nowindow']]
   ],
   live: [
     ['node', ['tools/test-ollama-live.js']]

@@ -1,350 +1,30 @@
 (function () {
-    function providerLabel(provider, providerProfileMap) { return providerProfileMap[provider]?.label || (provider.charAt(0).toUpperCase() + provider.slice(1)); }
-
-    function prettyChannelLabel(value) {
-        const labels = {
-            none: 'not exposed',
-            inline: 'inline',
-            separate: 'separate'
-        };
-        return labels[value] || value || 'unknown';
-    }
-
-    function visibilityOptionsFor(reasoningCaps) {
-        const supportedModes = Array.isArray(reasoningCaps?.visibilityModes) && reasoningCaps.visibilityModes.length
-            ? reasoningCaps.visibilityModes
-            : ['show', 'min', 'hide'];
-        const labels = {
-            show: 'Expanded',
-            min: 'Collapsed',
-            hide: 'Hidden'
-        };
-
-        return supportedModes.map(value => ({
-            value,
-            label: labels[value] || value
-        }));
-    }
-
-    function setCurrentConfigLabel(configDisplay, configText, config) {
-        if (!configDisplay || !configText) return;
-
-        if (!config?.provider) {
-            configDisplay.style.display = 'none';
-            return;
-        }
-
-        configDisplay.style.display = 'block';
-        const providerName = config.providerLabel || config.provider.charAt(0).toUpperCase() + config.provider.slice(1);
-        configText.textContent = config.model
-            ? `Provider: ${providerName}, Model: "${config.model}"`
-            : `Provider: ${providerName}`;
-    }
-
-    function escapeHtml(value) {
-        return String(value || '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
-    }
-
-    function providerFieldId(fieldId) {
-        return `provider-field-${fieldId}`;
-    }
-
-    function renderGenericProviderSettings(profile, connection = {}) {
-        const fields = Array.isArray(profile?.settings?.connectionFields)
-            ? profile.settings.connectionFields
-            : [];
-
-        const fieldMarkup = fields.map(field => {
-            const isSecret = field.id === 'apiKey' || field.type === 'password';
-            const configured = Boolean(connection[`${field.id}Configured`] || (field.id === 'apiKey' && connection.apiKeyConfigured));
-            const value = isSecret ? '' : (connection[field.id] ?? field.defaultValue ?? '');
-            const placeholder = configured
-                ? 'Configured - enter a new value to replace'
-                : (field.placeholder || '');
-            const helpMarkup = field.helpText
-                ? `<div class="config-help">${escapeHtml(field.helpText)}</div>`
-                : '';
-            const statusMarkup = configured
-                ? `<div class="config-help">Secret is saved securely and hidden here.</div>`
-                : '';
-
-            return `
-                <div class="config-field">
-                    <label for="${providerFieldId(field.id)}">${escapeHtml(field.label)}</label>
-                    <input
-                        type="${field.type === 'password' ? 'password' : 'text'}"
-                        id="${providerFieldId(field.id)}"
-                        data-secret-field="${isSecret ? 'true' : 'false'}"
-                        data-configured="${configured ? 'true' : 'false'}"
-                        placeholder="${escapeHtml(placeholder)}"
-                        value="${escapeHtml(value)}"
-                    >
-                    ${helpMarkup}
-                    ${statusMarkup}
-                </div>
-            `;
-        }).join('');
-
-        const noteMarkup = Array.isArray(profile?.notes) && profile.notes.length
-            ? `<div class="api-provider-notes">${profile.notes.map(note => `<p>${escapeHtml(note)}</p>`).join('')}</div>`
-            : '';
-
-        return `
-            <div class="api-provider-settings-block">
-                ${fieldMarkup}
-                ${noteMarkup}
-            </div>
-        `;
-    }
-
-    function renderOpenAIProviderSettings(profile, connection = {}, config = {}) {
-        const transport = config.transport || 'codex-cli';
-        const apiSettings = renderGenericProviderSettings(profile, connection);
-        const sandbox = config.codexSandbox || 'read-only';
-        const searchChecked = config.codexSearch ? 'checked' : '';
-
-        return `
-            <div class="api-provider-settings-block">
-                <div class="config-field">
-                    <label>OpenAI access</label>
-                    <div class="config-inline-row">
-                        <label class="config-checkbox"><input type="radio" name="openai-transport" value="codex-cli" ${transport !== 'api-key' ? 'checked' : ''}> <span>Codex subscription</span></label>
-                        <label class="config-checkbox"><input type="radio" name="openai-transport" value="api-key" ${transport === 'api-key' ? 'checked' : ''}> <span>API key</span></label>
-                    </div>
-                </div>
-                <div id="openai-codex-settings" class="api-subsection">
-                    <div class="api-action-row">
-                        <button type="button" id="openai-codex-login" class="secondary-btn">Sign in</button>
-                        <button type="button" id="openai-codex-check" class="secondary-btn">Check</button>
-                    </div>
-                    <div id="openai-codex-status" class="config-help api-status-text"></div>
-                    <details class="api-advanced-settings">
-                        <summary>Advanced</summary>
-                        <div class="api-settings-grid">
-                            <div class="api-field">
-                                <label for="openai-codex-sandbox">Sandbox</label>
-                                <select id="openai-codex-sandbox">
-                                    <option value="read-only" ${sandbox === 'read-only' ? 'selected' : ''}>read-only</option>
-                                    <option value="workspace-write" ${sandbox === 'workspace-write' ? 'selected' : ''}>workspace-write</option>
-                                </select>
-                            </div>
-                            <label class="api-toggle-row">
-                                <span class="api-toggle-copy">
-                                    <span class="api-toggle-title">Web search</span>
-                                    <span class="api-toggle-help">Passes --search to Codex CLI.</span>
-                                </span>
-                                <input type="checkbox" id="openai-codex-search" ${searchChecked}>
-                            </label>
-                        </div>
-                    </details>
-                </div>
-                <div id="openai-api-settings" class="api-subsection">
-                    ${apiSettings}
-                </div>
-            </div>
-        `;
-    }
-
-    function parseRequestOverridesValue(baseRuntimeConfig = {}, strict = false) {
-        const input = document.getElementById('model-request-overrides');
-        if (!input) {
-            return {
-                value: baseRuntimeConfig.requestOverrides || {},
-                valid: true
-            };
-        }
-
-        const raw = input.value.trim();
-        if (!raw) {
-            delete input.dataset.invalid;
-            return { value: {}, valid: true };
-        }
-
-        try {
-            const parsed = JSON.parse(raw);
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                throw new Error('Overrides must be a JSON object');
-            }
-            delete input.dataset.invalid;
-            return { value: parsed, valid: true };
-        } catch (error) {
-            input.dataset.invalid = 'true';
-            if (strict) {
-                throw new Error('Request overrides must be a valid JSON object');
-            }
-            return {
-                value: baseRuntimeConfig.requestOverrides || {},
-                valid: false
-            };
-        }
-    }
-
-    function renderModelSettings(capabilitiesContainer, container, section, profile) {
-        if (!capabilitiesContainer || !container || !section) return;
-
-        if (!profile?.spec?.model) {
-            section.style.display = 'none';
-            capabilitiesContainer.textContent = '';
-            container.innerHTML = '';
-            return;
-        }
-
-        const { spec, runtimeConfig } = profile;
-        const reasoningCaps = spec.capabilities?.reasoning || {};
-        const streamingCaps = spec.capabilities?.streaming || {};
-        const routingCaps = spec.capabilities?.providerRouting || {};
-        const contextCaps = spec.capabilities?.contextWindow || {};
-        const modalityCaps = spec.capabilities?.modalities || {};
-        const requestOverrideCaps = spec.capabilities?.requestOverrides || {};
-        const concurrencyCaps = spec.capabilities?.concurrency || {};
-        const visibilityOptions = visibilityOptionsFor(reasoningCaps);
-        const effortOptions = Array.isArray(reasoningCaps.effortLevels) ? reasoningCaps.effortLevels : [];
-        const reasoningChecked = runtimeConfig.reasoning?.enabled ? 'checked' : '';
-        const reasoningControlAvailable = reasoningCaps.supported && reasoningCaps.toggle;
-        const reasoningToggleDisabled = reasoningControlAvailable ? '' : 'disabled';
-        const requireParamsChecked = runtimeConfig.providerRouting?.requireParameters ? 'checked' : '';
-        const concurrencyChecked = runtimeConfig.concurrency?.allowParallel ? 'checked' : '';
-        const requestOverridesValue = runtimeConfig.requestOverrides && Object.keys(runtimeConfig.requestOverrides).length
-            ? JSON.stringify(runtimeConfig.requestOverrides, null, 2)
-            : '';
-        const reasoningHelpText = reasoningCaps.supported
-            ? (reasoningCaps.toggle
-                ? 'Uses the mapped provider/model controls for this family.'
-                : 'This model family is treated as fixed reasoning.')
-            : 'No explicit reasoning control is mapped for this model yet.';
-        const capabilityParts = [];
-
-        section.style.display = 'block';
-        if (reasoningCaps.supported) {
-            capabilityParts.push('Reasoning supported');
-        }
-        if (effortOptions.length) {
-            capabilityParts.push(`Effort: ${effortOptions.join(', ')}`);
-        }
-        if (reasoningCaps.maxTokens) {
-            capabilityParts.push('Thinking budget supported');
-        }
-        if (streamingCaps.text) {
-            capabilityParts.push('Text streaming available');
-        }
-        if (streamingCaps.reasoning && streamingCaps.reasoning !== 'none') {
-            capabilityParts.push(`Thinking output: ${prettyChannelLabel(streamingCaps.reasoning)}`);
-        }
-        if (contextCaps.supported && runtimeConfig.contextWindow?.value) {
-            capabilityParts.push(contextCaps.configurable
-                ? 'Context size configurable'
-                : `Context: ${runtimeConfig.contextWindow.value.toLocaleString()} tokens`);
-        }
-        if (modalityCaps.vision) {
-            capabilityParts.push('Vision input available');
-        }
-        if (requestOverrideCaps.supported) {
-            capabilityParts.push('Advanced request overrides');
-        }
-        if (concurrencyCaps.supported) {
-            capabilityParts.push('Parallel inference configurable');
-        }
-        if (spec.notes?.length) {
-            capabilityParts.push(spec.notes[0]);
-        }
-        capabilitiesContainer.textContent = capabilityParts.join(' | ');
-
-        container.innerHTML = `
-            <div class="api-model-settings">
-                <label class="api-toggle-row ${reasoningControlAvailable ? '' : 'is-disabled'}">
-                    <span class="api-toggle-copy">
-                        <span class="api-toggle-title">Enable reasoning / thinking</span>
-                        <span class="api-toggle-help">${reasoningHelpText}</span>
-                    </span>
-                    <input type="checkbox" id="model-reasoning-enabled" ${reasoningChecked} ${reasoningToggleDisabled}>
-                </label>
-                <div class="api-settings-grid">
-                    <div class="api-field">
-                        <label>Thinking visibility</label>
-                        <div class="api-pill-picker" role="radiogroup" aria-label="Thinking visibility">
-                            ${visibilityOptions.map(option => `
-                            <label class="api-pill-option">
-                                <input type="radio" name="model-reasoning-visibility" value="${option.value}" ${runtimeConfig.reasoning?.visibility === option.value ? 'checked' : ''}>
-                                <span>${option.label}</span>
-                            </label>`).join('')}
-                        </div>
-                    </div>
-                    ${effortOptions.length ? `
-                    <div class="api-field">
-                        <label for="model-reasoning-effort">Reasoning effort</label>
-                        <select id="model-reasoning-effort">
-                            ${effortOptions.map(level => `<option value="${level}" ${runtimeConfig.reasoning?.effort === level ? 'selected' : ''}>${level}</option>`).join('')}
-                        </select>
-                    </div>` : ''}
-                    ${reasoningCaps.maxTokens ? `
-                    <div class="api-field">
-                        <label for="model-reasoning-budget">Thinking budget</label>
-                        <input type="number" id="model-reasoning-budget" min="1" step="1" value="${runtimeConfig.reasoning?.maxTokens || ''}" placeholder="e.g. 2048">
-                    </div>` : ''}
-                    ${requestOverrideCaps.supported ? `
-                    <div class="api-field api-field-wide">
-                        <label for="model-request-overrides">Request overrides (JSON)</label>
-                        <textarea id="model-request-overrides" rows="5" placeholder='{"top_k": 40}'>${escapeHtml(requestOverridesValue)}</textarea>
-                        <div class="config-help">Merged into the request body after the app's standard parameters.</div>
-                    </div>` : ''}
-                </div>
-                ${routingCaps.requireParameters ? `
-                <label class="api-toggle-row">
-                    <span class="api-toggle-copy">
-                        <span class="api-toggle-title">Require backend support for selected parameters</span>
-                        <span class="api-toggle-help">Useful for OpenRouter so routed backends actually support reasoning settings.</span>
-                    </span>
-                    <input type="checkbox" id="model-require-params" ${requireParamsChecked}>
-                </label>` : ''}
-                ${concurrencyCaps.supported ? `<label class="api-toggle-row"><span class="api-toggle-copy"><span class="api-toggle-title">Allow parallel requests for this provider</span><span class="api-toggle-help">When enabled, same-provider calls may run concurrently if concurrency_mode is set to parallel.</span></span><input type="checkbox" id="model-concurrency-allow" ${concurrencyChecked}></label>` : ''}
-            </div>
-        `;
-    }
-
-    function collectRuntimeConfig(baseRuntimeConfig = {}, strict = false) {
-        const selectedVisibility = document.querySelector('input[name="model-reasoning-visibility"]:checked');
-        const legacyVisibilitySelect = document.getElementById('model-reasoning-visibility');
-        const requestOverrides = parseRequestOverridesValue(baseRuntimeConfig, strict);
-
-        return {
-            reasoning: {
-                enabled: document.getElementById('model-reasoning-enabled')
-                    ? Boolean(document.getElementById('model-reasoning-enabled')?.checked)
-                    : Boolean(baseRuntimeConfig.reasoning?.enabled),
-                visibility: selectedVisibility?.value || legacyVisibilitySelect?.value || baseRuntimeConfig.reasoning?.visibility || 'show',
-                effort: document.getElementById('model-reasoning-effort')?.value || baseRuntimeConfig.reasoning?.effort || null,
-                maxTokens: document.getElementById('model-reasoning-budget')?.value || baseRuntimeConfig.reasoning?.maxTokens || null
-            },
-            streaming: {
-                text: Boolean(baseRuntimeConfig.streaming?.text),
-                reasoning: Boolean(baseRuntimeConfig.streaming?.reasoning)
-            },
-            providerRouting: {
-                requireParameters: document.getElementById('model-require-params')
-                    ? Boolean(document.getElementById('model-require-params')?.checked)
-                    : Boolean(baseRuntimeConfig.providerRouting?.requireParameters)
-            },
-            concurrency: {
-                allowParallel: document.getElementById('model-concurrency-allow') ? Boolean(document.getElementById('model-concurrency-allow')?.checked) : Boolean(baseRuntimeConfig.concurrency?.allowParallel)
-            },
-            requestOverrides: requestOverrides.value
-        };
-    }
+    const {
+        providerLabel,
+        setCurrentConfigLabel,
+        providerFieldId,
+        normalizeParamString,
+        renderGenericProviderSettings,
+        renderOpenAIProviderSettings,
+        renderModelSettings,
+        collectRuntimeConfig
+    } = window.ApiProviderSettingsHelpers || {};
 
     window.initializeApiProviderSettings = async function (mainPanel) {
         const llmProviderSelect = document.getElementById('llm-provider-select');
         const llmModelSelect = document.getElementById('llm-model-select');
+        const llmModelLabel = document.querySelector('label[for="llm-model-select"]');
+        const llmModelRow = llmModelSelect?.closest('.api-inline-action-row');
         const refreshModelsButton = document.getElementById('refresh-provider-models-btn');
+        const testSelectedModelButton = document.getElementById('test-selected-model-btn');
+        const selectedModelStatus = document.getElementById('selected-model-status');
         const providerDiscoveryStatus = document.getElementById('provider-discovery-status');
         const providerSettingsContainer = document.getElementById('provider-settings-container');
         const llmConfigSaveButton = document.getElementById('llm-config-save-button');
         const modelSettingsSection = document.getElementById('llm-model-settings-section');
         const modelCapabilitiesContainer = document.getElementById('llm-model-capabilities');
         const modelConfigContainer = document.getElementById('llm-model-config-container');
+        const llmSettingsContainer = document.querySelector('#api-tab .llm-settings');
         const globalConcurrencyToggle = document.getElementById('global-concurrency-enabled');
         const currentConfigDisplay = document.getElementById('current-config-display');
         const currentConfigText = document.getElementById('current-config-text');
@@ -358,7 +38,35 @@
         let providerProfileMap = {};
         let syncModelsToChat = null;
         let modelProfileRequestId = 0;
+        const modelClusterDefaultAnchor = document.createElement('div');
+        const modelClusterLocalAnchor = document.createElement('div');
+        modelClusterDefaultAnchor.className = 'initially-hidden';
+        modelClusterLocalAnchor.className = 'initially-hidden';
         const getProviderProfile = (provider) => providerProfileMap[provider] || null;
+
+        if (providerDiscoveryStatus?.parentNode && llmModelLabel && llmModelRow) {
+            providerDiscoveryStatus.parentNode.insertBefore(modelClusterDefaultAnchor, llmModelLabel);
+            providerDiscoveryStatus.parentNode.insertBefore(modelClusterLocalAnchor, providerSettingsContainer.nextSibling);
+        }
+
+        const moveModelCluster = (anchor) => {
+            if (!anchor || !llmModelLabel || !llmModelRow) return;
+            const nodes = [llmModelLabel, llmModelRow, selectedModelStatus, providerDiscoveryStatus];
+            for (let i = nodes.length - 1; i >= 0; i -= 1) {
+                const node = nodes[i];
+                if (node?.parentNode) {
+                    anchor.parentNode.insertBefore(node, anchor.nextSibling);
+                }
+            }
+        };
+
+        const applyProviderFieldOrderLayout = (provider) => {
+            if (provider === 'local-openai') {
+                moveModelCluster(modelClusterLocalAnchor);
+            } else {
+                moveModelCluster(modelClusterDefaultAnchor);
+            }
+        };
 
         const toggleCustomModelSection = (provider) => {
             const customSection = document.getElementById('custom-model-section');
@@ -367,14 +75,28 @@
             const profile = getProviderProfile(provider);
             if (!customSection) return;
 
-            const enabled = Boolean(profile?.settings?.supportsCustomModel);
-            customSection.style.display = enabled ? 'flex' : 'none';
+            const enabled = Boolean(profile?.settings?.supportsCustomModel) && provider !== 'lmstudio' && provider !== 'local-openai';
+            customSection.classList?.toggle?.('initially-hidden', !enabled);
             if (customLabel) {
                 customLabel.textContent = profile?.settings?.customModelLabel || 'Custom Model';
             }
             if (customInput) {
                 customInput.placeholder = profile?.settings?.customModelPlaceholder || 'Type model name...';
             }
+        };
+
+        const updateModelActionControls = (provider) => {
+            if (!testSelectedModelButton) return;
+            const showSelectedTest = provider === 'local-openai';
+            testSelectedModelButton.classList?.toggle?.('initially-hidden', !showSelectedTest);
+            if (selectedModelStatus && !showSelectedTest) {
+                selectedModelStatus.textContent = '';
+            }
+        };
+
+        const applyProviderScrollLayout = (provider) => {
+            if (!llmSettingsContainer) return;
+            llmSettingsContainer.classList?.toggle?.('provider-scroll-enabled', provider === 'lmstudio');
         };
 
         const buildProviderConfig = (provider, { includeModel = true, strict = false } = {}) => {
@@ -394,7 +116,10 @@
                 profile.settings.connectionFields.forEach(field => {
                     const input = document.getElementById(providerFieldId(field.id));
                     if (!input) return;
-                    const value = input.value?.trim() || '';
+                    const rawValue = input.value || '';
+                    const value = (field.id === 'modelParams' || field.id === 'serverParams')
+                        ? normalizeParamString(rawValue)
+                        : rawValue.trim();
                     if ((field.id === 'apiKey' || field.type === 'password') && !value) {
                         return;
                     }
@@ -437,6 +162,17 @@
                 || model === 'Select a provider first'
                 || model === 'No models found'
                 || model === 'Failed to load models';
+        };
+
+        const resolveValidModel = (select, preferredModel = '') => {
+            const normalized = String(preferredModel || '').trim();
+            const options = Array.from(select?.options || []);
+            if (!options.length) return '';
+            if (normalized && options.some(option => option.value === normalized && !option.disabled)) {
+                return normalized;
+            }
+            const firstUsable = options.find(option => !option.disabled && !isPlaceholderModel(option.value));
+            return firstUsable?.value || '';
         };
 
         const persistConfig = async (config, notificationMessage = null) => {
@@ -488,7 +224,41 @@
             }
 
             try {
-                const models = await window.electronAPI.llm.getModels(provider, forceRefresh);
+                let models = await window.electronAPI.llm.getModels(provider, forceRefresh);
+                if (provider === 'lmstudio' && (!Array.isArray(models) || models.length === 0)) {
+                    const rawUrl = document.getElementById(providerFieldId('url'))?.value?.trim() || 'http://localhost:1234';
+                    const normalizeLmstudioModelsUrl = (baseUrl) => {
+                        try {
+                            const u = new URL(baseUrl);
+                            if (u.hostname === 'localhost') {
+                                u.hostname = '127.0.0.1';
+                            }
+                            const pathname = (u.pathname || '/').replace(/\/+$/, '') || '/';
+                            const hasV1 = pathname === '/v1' || pathname.endsWith('/v1');
+                            const basePath = hasV1 ? pathname : `${pathname === '/' ? '' : pathname}/v1`;
+                            u.pathname = `${basePath}/models`;
+                            return u.toString();
+                        } catch (_) {
+                            const stripped = String(baseUrl || '').replace(/\/+$/, '');
+                            return `${stripped}/v1/models`;
+                        }
+                    };
+
+                    try {
+                        const response = await fetch(normalizeLmstudioModelsUrl(rawUrl));
+                        if (response.ok) {
+                            const payload = await response.json();
+                            const rawModels = Array.isArray(payload?.data)
+                                ? payload.data
+                                : (Array.isArray(payload?.models) ? payload.models : []);
+                            models = rawModels
+                                .map(model => typeof model === 'string' ? model.trim() : String(model?.id || model?.name || '').trim())
+                                .filter(Boolean);
+                        }
+                    } catch (_) {
+                        // Keep empty list if direct fallback also fails.
+                    }
+                }
                 llmModelSelect.innerHTML = '<option disabled selected>Select a Model...</option>';
 
                 if (models && models.length > 0) {
@@ -499,7 +269,9 @@
                         llmModelSelect.appendChild(option);
                     });
 
-                    const targetModel = preferredModel || currentConfig?.model || null;
+                    const targetModel = preferredModel
+                        || (currentConfig?.provider === provider ? currentConfig?.model : null)
+                        || null;
                     if (targetModel && Array.from(llmModelSelect.options).some(o => o.value === targetModel)) {
                         llmModelSelect.value = targetModel;
                     }
@@ -510,7 +282,9 @@
                 if (providerDiscoveryStatus) {
                     providerDiscoveryStatus.textContent = models?.length
                         ? `Found ${models.length} model${models.length === 1 ? '' : 's'}.`
-                        : 'No models discovered. You can still enter a manual model ID below.';
+                        : (provider === 'local-openai'
+                            ? 'No models discovered. Set --model in Model Params, then click Test Model.'
+                            : 'No models discovered. You can still enter a manual model ID below.');
                 }
                 await loadModelProfile(provider, llmModelSelect.value);
                 return models || [];
@@ -542,7 +316,7 @@
                         </div>
                     </div>
                     <div id="qwen-cli-settings" class="config-help">CLI mode runs the local qwen command.</div>
-                    <div id="qwen-api-settings" class="api-subsection" style="display: none;">
+                    <div id="qwen-api-settings" class="api-subsection initially-hidden">
                         <div class="config-field">
                             <label for="qwen-key">API Key</label>
                             <input type="password" id="qwen-key" placeholder="sk-...">
@@ -552,7 +326,7 @@
                         </div>
                         <div id="qwen-api-status" class="config-help api-status-text"></div>
                     </div>
-                    <div id="qwen-oauth-settings" class="api-subsection" style="display: none;">
+                    <div id="qwen-oauth-settings" class="api-subsection initially-hidden">
                         <div class="api-action-row">
                             <button type="button" id="qwen-fetch-oauth" class="secondary-btn">Load OAuth Credentials</button>
                         </div>
@@ -719,6 +493,16 @@
             await persistConfig(config, `Switched to ${model}`);
         };
 
+        const autoPersistApiSelection = async () => {
+            const provider = llmProviderSelect?.value;
+            if (!provider || provider === 'Select a Provider...') return;
+
+            const model = llmModelSelect?.value;
+            const hasModel = !isPlaceholderModel(model);
+            const config = buildProviderConfig(provider, { includeModel: hasModel, strict: false });
+            await persistConfig(config);
+        };
+
         const updateDraftConfigLabel = () => {
             const provider = llmProviderSelect?.value;
             const model = llmModelSelect?.value;
@@ -747,12 +531,22 @@
 
         llmProviderSelect.addEventListener('change', async (event) => {
             const provider = event.target.value;
+            applyProviderScrollLayout(provider);
             await updateProviderSettings(provider);
+            applyProviderFieldOrderLayout(provider);
+            updateModelActionControls(provider);
             if (provider !== 'qwen') {
                 await loadModelsForProvider(provider, false, null);
             }
+            const resolvedModel = resolveValidModel(llmModelSelect, llmModelSelect.value);
+            if (resolvedModel) {
+                llmModelSelect.value = resolvedModel;
+                await loadModelProfile(provider, resolvedModel);
+            }
+            syncModelsToChat?.();
             toggleCustomModelSection(provider);
             updateDraftConfigLabel();
+            await autoPersistApiSelection();
 
             if (chatProviderSelect) {
                 chatProviderSelect.value = provider;
@@ -764,6 +558,7 @@
             const model = llmModelSelect.value;
             await loadModelProfile(provider, model);
             updateDraftConfigLabel();
+            await autoPersistApiSelection();
             if (chatModelSelect) {
                 chatModelSelect.value = model;
             }
@@ -774,10 +569,12 @@
             testModelBtn.addEventListener('click', async () => {
                 const customInput = document.getElementById('custom-model-input');
                 const statusDiv = document.getElementById('custom-model-status');
-                const modelName = customInput?.value?.trim();
+                const manualModel = customInput?.value?.trim() || '';
+                const selectedModel = llmModelSelect?.value || '';
+                const modelName = manualModel || (isPlaceholderModel(selectedModel) ? '' : selectedModel);
 
                 if (!modelName) {
-                    if (statusDiv) statusDiv.textContent = 'Please enter a model name';
+                    if (statusDiv) statusDiv.textContent = 'Pick a model or enter a model name';
                     return;
                 }
 
@@ -824,6 +621,67 @@
                 } finally {
                     testModelBtn.disabled = false;
                     testModelBtn.textContent = 'Test Model';
+                }
+            });
+        }
+
+        if (testSelectedModelButton) {
+            testSelectedModelButton.addEventListener('click', async () => {
+                const provider = llmProviderSelect.value;
+                if (provider !== 'local-openai') return;
+
+                const extractModelFromParams = () => {
+                    const raw = document.getElementById(providerFieldId('modelParams'))?.value || '';
+                    const normalized = String(raw).replace(/\s+/g, ' ').trim();
+                    if (!normalized) return '';
+                    const match = normalized.match(/(?:^|\s)--(?:model|model-id|model_id)\s+("[^"]+"|'[^']+'|\S+)/i)
+                        || normalized.match(/(?:^|\s)--(?:model|model-id|model_id)=("[^"]+"|'[^']+'|\S+)/i);
+                    if (!match?.[1]) return '';
+                    return String(match[1]).replace(/^['"]|['"]$/g, '').trim();
+                };
+
+                let modelName = llmModelSelect.value;
+                if (isPlaceholderModel(modelName)) {
+                    modelName = extractModelFromParams();
+                }
+
+                if (!modelName) {
+                    if (selectedModelStatus) selectedModelStatus.textContent = 'Pick a model or set --model in Model Params first.';
+                    return;
+                }
+
+                testSelectedModelButton.disabled = true;
+                testSelectedModelButton.textContent = 'Testing...';
+                if (selectedModelStatus) selectedModelStatus.textContent = '';
+
+                try {
+                    const result = await window.electronAPI.llm.testModel(provider, modelName);
+                    if (!result.success) throw new Error(result.error);
+
+                    if (!Array.from(llmModelSelect.options).some(o => o.value === modelName)) {
+                        const option = document.createElement('option');
+                        option.value = modelName;
+                        option.textContent = modelName;
+                        llmModelSelect.appendChild(option);
+                    }
+
+                    llmModelSelect.value = modelName;
+                    await loadModelProfile(provider, modelName);
+                    await autoPersistApiSelection();
+                    syncModelsToChat?.();
+                    if (chatProviderSelect) chatProviderSelect.value = provider;
+                    if (chatModelSelect && Array.from(chatModelSelect.options).some(o => o.value === modelName)) {
+                        chatModelSelect.value = modelName;
+                    }
+
+                    if (selectedModelStatus) {
+                        selectedModelStatus.textContent = `Model responds as ${result.model}.`;
+                    }
+                } catch (error) {
+                    if (selectedModelStatus) selectedModelStatus.textContent = `Test failed: ${error.message}`;
+                } finally {
+                    testSelectedModelButton.disabled = false;
+                    testSelectedModelButton.textContent = 'Test Model';
                 }
             });
         }
@@ -911,8 +769,12 @@
         }, {});
 
         const providers = await window.electronAPI.getProviders();
+        const availableProviders = Array.isArray(providers)
+            ? providers.filter(provider => String(provider || '').trim())
+            : [];
+        const knownProviderSet = new Set(availableProviders);
         llmProviderSelect.innerHTML = '<option disabled selected>Select a Provider...</option>';
-        providers.forEach(provider => {
+        availableProviders.forEach(provider => {
             const option = document.createElement('option');
             option.value = provider;
             option.textContent = providerLabel(provider, providerProfileMap);
@@ -923,44 +785,62 @@
         if (globalConcurrencyToggle) globalConcurrencyToggle.checked = Boolean(currentConfig?.concurrencyEnabled);
         setCurrentConfigLabel(currentConfigDisplay, currentConfigText, currentConfig);
 
-        if (currentConfig?.provider) {
-            llmProviderSelect.value = currentConfig.provider;
-            await updateProviderSettings(currentConfig.provider);
-            if (currentConfig.provider !== 'qwen') {
-                await loadModelsForProvider(currentConfig.provider, false, currentConfig.model);
+        const initialProvider = knownProviderSet.has(currentConfig?.provider)
+            ? currentConfig.provider
+            : (availableProviders[0] || '');
+        const initialModel = initialProvider && currentConfig?.provider === initialProvider
+            ? currentConfig?.model
+            : '';
+
+        if (initialProvider) {
+            applyProviderScrollLayout(initialProvider);
+            llmProviderSelect.value = initialProvider;
+            await updateProviderSettings(initialProvider);
+            applyProviderFieldOrderLayout(initialProvider);
+            updateModelActionControls(initialProvider);
+            if (initialProvider !== 'qwen') {
+                await loadModelsForProvider(initialProvider, false, initialModel);
             }
-            if (currentConfig.model && Array.from(llmModelSelect.options).some(o => o.value === currentConfig.model)) {
-                llmModelSelect.value = currentConfig.model;
-                await loadModelProfile(currentConfig.provider, currentConfig.model);
+            const resolvedInitialModel = resolveValidModel(llmModelSelect, initialModel);
+            if (resolvedInitialModel) {
+                llmModelSelect.value = resolvedInitialModel;
+                await loadModelProfile(initialProvider, resolvedInitialModel);
             }
-            toggleCustomModelSection(currentConfig.provider);
+            toggleCustomModelSection(initialProvider);
         } else {
+            applyProviderScrollLayout(null);
+            applyProviderFieldOrderLayout(null);
+            updateModelActionControls(null);
             renderModelSettings(modelCapabilitiesContainer, modelConfigContainer, modelSettingsSection, null);
         }
 
         if (chatProviderSelect && chatModelSelect) {
             chatProviderSelect.innerHTML = '';
-            providers.forEach(provider => {
+            availableProviders.forEach(provider => {
                 const option = document.createElement('option');
                 option.value = provider;
                 option.textContent = providerLabel(provider, providerProfileMap);
                 chatProviderSelect.appendChild(option);
             });
 
-            if (currentConfig?.provider) {
-                chatProviderSelect.value = currentConfig.provider;
+            if (initialProvider) {
+                chatProviderSelect.value = initialProvider;
             }
 
             syncModelsToChat = () => {
+                const preferredChatModel = chatModelSelect.value || llmModelSelect.value;
                 chatModelSelect.innerHTML = '';
                 Array.from(llmModelSelect.options).forEach(opt => {
                     const cloned = document.createElement('option');
                     cloned.value = opt.value;
                     cloned.textContent = opt.textContent;
                     cloned.disabled = opt.disabled;
-                    cloned.selected = opt.selected;
                     chatModelSelect.appendChild(cloned);
                 });
+                const resolvedChatModel = resolveValidModel(chatModelSelect, preferredChatModel);
+                if (resolvedChatModel) {
+                    chatModelSelect.value = resolvedChatModel;
+                }
             };
 
             syncModelsToChat();

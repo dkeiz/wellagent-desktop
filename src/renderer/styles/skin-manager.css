@@ -1,5 +1,18 @@
 .skin-settings-section {
-    gap: 0.6rem;
+    gap: 0.35rem;
+}
+
+.skin-settings-header {
+    margin: 0;
+    line-height: 1.1;
+}
+
+.skin-header-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 1rem;
+    color: var(--text-primary);
 }
 
 .skin-settings-section.skin-drop-active {
@@ -20,9 +33,13 @@
 .skin-picker-status {
     font-size: 0.78rem;
     color: var(--text-secondary);
-    min-height: 1rem;
+    min-height: 0;
     border-left: 2px solid var(--border-color);
     padding-left: 0.45rem;
+}
+
+.skin-picker-status:empty {
+    display: none;
 }
 
 .skin-picker-status.info {
@@ -48,13 +65,16 @@
 .skin-picker {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 0.45rem;
+    gap: 0.35rem;
+    margin-top: 0.2rem;
 }
 
 .skin-action-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.45rem;
+    gap: 0.35rem;
+    margin-top: 0.1rem;
+    margin-bottom: 0.1rem;
 }
 
 .skin-card {
@@ -66,10 +86,10 @@
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius);
     background: var(--card-bg);
-    padding: 0.4rem;
+    padding: 0.34rem;
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
+    gap: 0.22rem;
     cursor: pointer;
     transition: border-color 0.2s ease, transform 0.1s ease;
 }
@@ -93,8 +113,9 @@
 }
 
 .skin-card.active {
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 1px var(--primary-color);
+    border-color: color-mix(in srgb, var(--primary-color), transparent 45%);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary-color), transparent 70%);
+    background: color-mix(in srgb, var(--bg-secondary), var(--primary-color) 6%);
 }
 
 .skin-card.incompatible {
@@ -103,11 +124,7 @@
 }
 
 .skin-preview {
-    height: 38px;
-    border-radius: 4px;
-    border: 1px solid var(--border-color);
-    position: relative;
-    overflow: hidden;
+    display: none;
 }
 
 .skin-preview::before {
@@ -166,7 +183,7 @@
 .skin-card-desc {
     font-size: 0.68rem;
     color: var(--text-secondary);
-    line-height: 1.3;
+    line-height: 1.2;
     min-height: 0;
     display: -webkit-box;
     -webkit-line-clamp: 3;

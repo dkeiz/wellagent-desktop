@@ -16,7 +16,6 @@
       "component": "src/renderer/components/plugin-panel.js",
       "requiredIds": [
         "plugins-list",
-        "manage-plugins-btn",
         "toggle-plugins-widget",
         "plugins-widget-content"
       ]

@@ -122,6 +122,15 @@ function registerCoreTools(server) {
         description: params.description ?? ''
       });
       server.emit('calendar-update');
+      if (server._artifactRegistry) {
+        const sessionId = server.getCurrentSessionId?.() || 'default';
+        server._artifactRegistry.registerVirtual(sessionId, {
+          name: `📅 ${params.title}`,
+          kind: 'calendar',
+          source: 'calendar_op',
+          data: event
+        });
+      }
       return event;
     }
 
@@ -135,45 +144,85 @@ function registerCoreTools(server) {
 
   server.registerTool('todo_op', {
     name: 'todo_op',
-    description: 'Unified todo operations. Actions: create, list, complete.',
+    description: 'Unified todo operations. Actions: create, list, complete, visibility. Optional visible boolean controls the chat todo dropdown.',
     userDescription: 'Manage todo items',
     example: 'TOOL:todo_op{"action":"list"}',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', description: 'Operation: create | list | complete' },
+        action: { type: 'string', description: 'Operation: create | list | complete | visibility' },
         task: { type: 'string', description: 'Task description for create action' },
         priority: { type: 'number', description: 'Priority for create action', default: 1 },
         due_date: { type: 'string', description: 'Due date for create action' },
-        id: { type: 'number', description: 'Todo ID for complete action' }
+        id: { type: 'number', description: 'Todo ID for complete action' },
+        visible: { type: 'boolean', description: 'Show or hide active todos in the chat floating todo dropdown' }
       },
       required: ['action']
     }
-  }, async (params) => {
+  }, async (params, toolRuntime = {}) => {
     const action = String(params.action || '').toLowerCase();
+    const contextSessionId = toolRuntime?.context?.sessionId;
+    const sessionId = contextSessionId === undefined || contextSessionId === null
+      ? (server.getCurrentSessionId?.() || null)
+      : contextSessionId;
+    const todoSessionId = sessionId === null || sessionId === undefined ? null : String(sessionId);
+    const hasVisibleFlag = typeof params.visible === 'boolean';
+    const applyVisibilityFlag = async () => {
+      if (!hasVisibleFlag) return null;
+      await server.db.setSetting('todo.visible', params.visible ? 'true' : 'false');
+      return params.visible;
+    };
+
+    if (action === 'visibility') {
+      if (!hasVisibleFlag) return { error: 'visible boolean is required for visibility action' };
+      await applyVisibilityFlag();
+      return { visible: params.visible };
+    }
+
     if (action === 'create') {
       if (!params.task) return { error: 'task is required for create action' };
-      return server.db.addTodo({
+      await applyVisibilityFlag();
+      const result = await server.db.addTodo({
         task: params.task,
         priority: params.priority ?? 1,
         due_date: params.due_date ?? null
-      });
+      }, todoSessionId);
+      if (server._artifactRegistry) {
+        server._artifactRegistry.registerVirtual(todoSessionId || 'default', {
+          name: `☑ ${params.task}`,
+          kind: 'todo',
+          source: 'todo_op',
+          data: result
+        });
+      }
+      return result;
     }
 
     if (action === 'list') {
-      const todos = await server.db.getTodos();
-      return todos.map(todo => ({
+      const visible = await applyVisibilityFlag();
+      const todos = await server.db.getTodos(todoSessionId);
+      const items = todos.map(todo => ({
         id: todo.id,
         task: todo.task,
         completed: todo.completed === 1 || todo.completed === true,
         priority: todo.priority,
         due_date: todo.due_date
       }));
+      return hasVisibleFlag ? { visible, todos: items } : items;
     }
 
     if (action === 'complete') {
       if (!params.id) return { error: 'id is required for complete action' };
-      return server.db.updateTodo(params.id, { completed: true });
+      await applyVisibilityFlag();
+      const todos = await server.db.getTodos(todoSessionId);
+      const current = todos.find(todo => Number(todo.id) === Number(params.id));
+      if (!current) return { error: `Todo not found: ${params.id}` };
+      return server.db.updateTodo(params.id, {
+        task: current.task,
+        completed: true,
+        priority: current.priority,
+        due_date: current.due_date
+      }, todoSessionId);
     }
 
     return { error: `Unknown todo action: ${params.action}` };
@@ -197,6 +246,86 @@ function registerCoreTools(server) {
     }
   }, async (params) => {
     return await server.db.getConversations(params.limit);
+  });
+
+  server.registerTool('display_content', {
+    name: 'display_content',
+    description: 'Send a structured document, markdown snippet, code block, local file, or web URL directly to the user\'s desktop Content Viewer panel. Use this to present rich formatted tables, detailed reports, parsed logs, charts, images, web pages, or code side-by-side with chat.',
+    userDescription: 'Display rich content in the side Content Viewer',
+    example: 'TOOL:display_content{"type":"markdown","title":"Sales Report","content":"# Report\\n* Sales are up 20%"}',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          description: 'Type of content: markdown | code | image | html | text | url | file | document',
+          enum: ['markdown', 'code', 'image', 'html', 'text', 'url', 'file', 'document']
+        },
+        title: {
+          type: 'string',
+          description: 'Descriptive title for the content viewer tab'
+        },
+        content: {
+          type: 'string',
+          description: 'The actual content text (markdown, code, html, plain text, document body) to display. Optional if url or filePath is specified.'
+        },
+        text: {
+          type: 'string',
+          description: 'Alias for content when sending plain text, markdown, code, or document bodies. Optional.'
+        },
+        html: {
+          type: 'string',
+          description: 'Raw HTML to display in a sandboxed viewer frame. Optional.'
+        },
+        url: {
+          type: 'string',
+          description: 'URL or local file path to display (mainly for image/url/html types). Optional.'
+        },
+        filePath: {
+          type: 'string',
+          description: 'Local file path to display when type is file. Optional.'
+        },
+        language: {
+          type: 'string',
+          description: 'Programming language for code highlighting (e.g. javascript, python, css, html). Optional.'
+        }
+      },
+      required: ['type', 'title']
+    }
+  }, async (params, toolRuntime = {}) => {
+    const contextSessionId = toolRuntime?.context?.sessionId;
+    const sessionId = contextSessionId === undefined || contextSessionId === null
+      ? (server.getCurrentSessionId?.() || 'default')
+      : contextSessionId;
+
+    const content = params.content ?? params.text ?? '';
+    const html = params.html ?? (params.type === 'html' ? content : '');
+    const url = params.url || (['url', 'image'].includes(params.type) ? content : '');
+    const filePath = params.filePath || (params.type === 'file' ? (params.url || content) : '');
+
+    const result = {
+      type: params.type,
+      title: params.title,
+      content,
+      text: content,
+      html,
+      url,
+      filePath,
+      language: params.language || '',
+      sourceAgentId: toolRuntime?.context?.agentId || 'agent',
+      sourceSessionId: sessionId
+    };
+
+    if (server._artifactRegistry) {
+      server._artifactRegistry.registerVirtual(sessionId, {
+        name: params.title,
+        kind: params.type,
+        source: 'display_content',
+        data: result
+      });
+    }
+
+    return result;
   });
 }
 

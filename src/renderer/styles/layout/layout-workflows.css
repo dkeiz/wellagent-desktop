@@ -159,6 +159,12 @@ html[data-active-skin] .workflow-toolbar #run-workflow-btn {
     background-color: var(--bg-color);
 }
 
+.workflow-canvas-container.workflow-interacting,
+.workflow-canvas-container.workflow-interacting * {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+}
+
 .workflow-connections {
     position: absolute;
     top: 0;
@@ -174,6 +180,11 @@ html[data-active-skin] .workflow-toolbar #run-workflow-btn {
     stroke-width: 2;
     fill: none;
     filter: drop-shadow(0 0 4px rgba(74, 222, 128, 0.4));
+}
+
+.connection-line-preview {
+    stroke: #60a5fa;
+    filter: drop-shadow(0 0 3px rgba(96, 165, 250, 0.45));
 }
 
 .workflow-canvas {

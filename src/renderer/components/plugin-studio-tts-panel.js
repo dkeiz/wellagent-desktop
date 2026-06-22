@@ -11,7 +11,6 @@
             ? panel.getSelectedPlugin()
             : null;
     }
-
     function getState(panel) {
         if (!panel._ttsStudioState) {
             panel._ttsStudioState = {
@@ -29,18 +28,15 @@
         }
         return panel._ttsStudioState;
     }
-
     function clearStateTimer(panel, key) {
         const state = getState(panel);
         if (!state[key]) return;
         clearTimeout(state[key]);
         state[key] = null;
     }
-
     function clearRefresh(panel) {
         clearStateTimer(panel, 'refreshTimer');
     }
-
     function clearVoiceDescriptionSave(panel) {
         clearStateTimer(panel, 'voiceDescriptionSaveTimer');
     }
@@ -56,39 +52,33 @@
             });
         }, delayMs);
     }
-
     function createElement(tagName, className, textContent) {
         const element = document.createElement(tagName);
         if (className) element.className = className;
         if (textContent != null) element.textContent = textContent;
         return element;
     }
-
     function createButton(label, onClick, className = 'compact-btn') {
         const button = createElement('button', className, label);
         button.type = 'button';
         button.addEventListener('click', onClick);
         return button;
     }
-
     function createOption(value, label) {
         const option = document.createElement('option');
         option.value = value;
         option.textContent = label;
         return option;
     }
-
     function boolFromConfig(value, fallback = false) {
         if (typeof value === 'boolean') return value;
         if (value == null || value === '') return fallback;
         return ['true', '1', 'yes', 'on'].includes(String(value).toLowerCase());
     }
-
     function getPluginConfigValue(panel, key, fallback = '') {
         const raw = panel?.selectedDetail?.config?.[key];
         return raw == null || raw === '' ? fallback : raw;
     }
-
     function prettifyVoiceId(voiceId) {
         const value = String(voiceId || '').trim();
         if (!value) return 'None';
@@ -97,7 +87,6 @@
         if (value.startsWith('piper:')) return value.slice('piper:'.length);
         return value;
     }
-
     function statusLabel(plugin, backend) {
         if (plugin?.status !== 'enabled') return 'Disabled';
         if (isBackendLoading(backend)) return 'Loading';
@@ -106,7 +95,6 @@
         if (backend?.lastError) return 'Error';
         return 'Stopped';
     }
-
     function statusTone(plugin, backend) {
         if (plugin?.status !== 'enabled') return 'muted';
         if (backend?.ready && backend?.healthy) return 'good';
@@ -114,17 +102,14 @@
         if (isBackendLoading(backend) || backend?.running) return 'warm';
         return 'muted';
     }
-
     function isBackendLoading(backend) {
         return Boolean(backend?.starting || (backend?.running && !backend?.ready));
     }
-
     function formatSeconds(value) {
         const number = Number(value);
         if (!Number.isFinite(number) || number <= 0) return '-';
         return `${number.toFixed(number < 1 ? 2 : 1)}s`;
     }
-
     function shortModelLabel(modelId) {
         const value = String(modelId || '').trim();
         if (!value) return 'Model';
@@ -136,7 +121,6 @@
         }
         return value;
     }
-
     function modelStatusText(item) {
         if (!item) return 'Not checked';
         if (item.loaded) return 'Loaded';
@@ -144,14 +128,12 @@
         if (item.local_available) return 'Present';
         return item.status || 'Missing';
     }
-
     function modelTone(item) {
         if (!item) return 'muted';
         if (item.loaded || item.local_usable) return 'good';
         if (item.local_available) return 'warm';
         return 'muted';
     }
-
     function dedupeVoiceOptions(options) {
         const seen = new Set();
         const items = [];
@@ -166,7 +148,6 @@
         }
         return items;
     }
-
     function buildPiperModelVoiceOptions(state) {
         const items = Array.isArray(state?.models?.items) ? state.models.items : [];
         return items
@@ -174,7 +155,6 @@
             .filter(item => item?.loaded || item?.local_usable || item?.local_available || ['ready', 'loaded', 'present'].includes(String(item?.status || '').toLowerCase()))
             .map(item => ({ id: item.id, label: String(item.id).slice('piper:'.length) }));
     }
-
     function getVoiceOptions(state, provider) {
         if (provider === 'browser') {
             return [{ id: '', label: 'Browser default' }];
@@ -204,7 +184,6 @@
         }
         return [{ id: '', label: 'No voices' }];
     }
-
     function resolveActiveVoice(state, voiceOptions) {
         const savedVoice = String(state?.settings?.voice || '').trim();
         const firstRealOption = voiceOptions.find(option => option.id)?.id || '';
@@ -215,15 +194,12 @@
         state.settings.voice = activeVoice;
         return activeVoice;
     }
-
     function normalizeVoiceDescription(value) { return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 500); }
     function getVoiceDescriptionValue(state) { return normalizeVoiceDescription(state?.settings?.voiceDescription || ''); }
-
     function findVoiceMeta(state, voiceId) {
         const voices = Array.isArray(state?.voices) ? state.voices : [];
         return voices.find(voice => String(voice?.id || '') === String(voiceId || '')) || null;
     }
-
     function getVoiceDescriptionMeta(panel, state) {
         const provider = state.settings?.provider || 'browser';
         const voiceId = String(state.settings?.voice || '').trim();
@@ -284,7 +260,7 @@
         state.voiceDescriptionSaveTimer = setTimeout(async () => {
             state.voiceDescriptionSaveTimer = null;
             try {
-                await saveTtsSettings(panel, { voiceDescription: state.settings.voiceDescription });
+                await saveVoiceSettings(panel, { voiceDescription: state.settings.voiceDescription });
             } catch (error) {
                 panel.setResult(error.message || String(error));
             }
@@ -311,15 +287,39 @@
     }
 
     async function saveTtsSettings(panel, patch) {
-        const response = await window.electronAPI.tts.saveSettings({
-            defaultPluginId: PLUGIN_ID,
-            ...patch
-        });
+        const response = await window.electronAPI.tts.saveSettings(patch || {});
         if (!response?.success) {
             throw new Error(response?.error || 'Failed to save TTS settings');
         }
         const state = getState(panel);
-        state.settings = response.settings || state.settings || {};
+        state.settings = {
+            ...(state.settings || {}),
+            ...(response.settings || {})
+        };
+        return state.settings;
+    }
+
+    async function saveVoiceSettings(panel, patch) {
+        const state = getState(panel);
+        const updates = [];
+        if (patch.provider !== undefined) updates.push(['selectedProvider', patch.provider]);
+        if (patch.voice !== undefined) updates.push(['selectedVoice', patch.voice]);
+        if (patch.voiceDescription !== undefined) updates.push(['voiceDescription', patch.voiceDescription]);
+
+        for (const [key, value] of updates) {
+            await savePluginConfig(panel, key, value);
+        }
+        if (patch.provider !== undefined) {
+            await saveTtsSettings(panel, {
+                defaultPluginId: patch.provider === 'browser' ? '' : PLUGIN_ID
+            });
+        }
+        state.settings = {
+            ...(state.settings || {}),
+            ...(patch.provider !== undefined ? { provider: patch.provider } : {}),
+            ...(patch.voice !== undefined ? { voice: patch.voice } : {}),
+            ...(patch.voiceDescription !== undefined ? { voiceDescription: patch.voiceDescription } : {})
+        };
         return state.settings;
     }
 
@@ -376,7 +376,13 @@
         const state = getState(panel);
         const plugin = getSelectedPlugin(panel);
 
-        state.settings = await window.electronAPI.tts.getSettings();
+        const ttsSettings = await window.electronAPI.tts.getSettings();
+        state.settings = {
+            ...(ttsSettings || {}),
+            provider: getPluginConfigValue(panel, 'selectedProvider', ttsSettings?.defaultPluginId === PLUGIN_ID ? 'fast-qwen' : 'browser'),
+            voice: getPluginConfigValue(panel, 'selectedVoice', ''),
+            voiceDescription: getPluginConfigValue(panel, 'voiceDescription', '')
+        };
         state.backend = null;
         state.models = null;
         state.voices = [];
@@ -555,7 +561,7 @@
             const nextOptions = getVoiceOptions(state, nextProvider);
             const nextVoice = nextProvider === 'browser' ? '' : (nextOptions[0]?.id || '');
             try {
-                await saveTtsSettings(panel, {
+                await saveVoiceSettings(panel, {
                     provider: nextProvider,
                     voice: nextVoice
                 });
@@ -577,7 +583,7 @@
         voiceSelect.disabled = provider !== 'browser' && !voiceOptions.some(option => option.id);
         voiceSelect.addEventListener('change', async () => {
             try {
-                await saveTtsSettings(panel, { voice: voiceSelect.value });
+                await saveVoiceSettings(panel, { voice: voiceSelect.value });
                 panel.setResult(`Voice set to ${prettifyVoiceId(voiceSelect.value)}`);
             } catch (error) {
                 panel.setResult(error.message || String(error));
@@ -683,12 +689,7 @@
                 panel.setResult('Browser preview started');
                 return;
             }
-            const result = await runPluginAction(panel, 'previewVoice', {
-                text,
-                provider,
-                voice: state.settings?.voice || '',
-                style: provider === 'fast-qwen' ? getVoiceDescriptionValue(state) : null
-            });
+            const result = await runPluginAction(panel, 'previewVoice', { text });
             if (!panel.playAudioPayload(result)) {
                 throw new Error('No playable audio was returned');
             }

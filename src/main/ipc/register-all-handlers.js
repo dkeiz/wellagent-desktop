@@ -3,53 +3,31 @@ const { registerChatDataHandlers } = require('./register-chat-data-handlers');
 const { registerToolsCapabilityHandlers } = require('./register-tools-capability-handlers');
 const { registerWorkflowHandlers } = require('./register-workflow-handlers');
 const { registerAgentSystemHandlers } = require('./register-agent-system-handlers');
+const { registerSetupSuperagentHandlers } = require('./register-setup-superagent-handlers');
 const { registerPluginKnowledgeHandlers } = require('./register-plugin-knowledge-handlers');
 const { registerDialogHandlers } = require('./register-dialog-handlers');
+const { registerSttHandlers } = require('./register-stt-handlers');
 const { registerTtsHandlers } = require('./register-tts-handlers');
 const { registerAppControlHandlers } = require('./register-app-control-handlers');
-const { createStaticWindowManager } = require('../window-manager');
-
-function buildRuntime(container) {
-  const windowManager = container.optional('windowManager')
-    || createStaticWindowManager(container.optional('mainWindow'));
-
-  return {
-    container,
-    db: container.get('db'),
-    aiService: container.get('aiService'),
-    mcpServer: container.get('mcpServer'),
-    windowManager,
-    ollamaService: container.optional('ollamaService'),
-    chainController: container.get('chainController'),
-    workflowManager: container.get('workflowManager'),
-    vectorStore: container.get('vectorStore'),
-    capabilityManager: container.get('capabilityManager'),
-    toolPermissionService: container.optional('toolPermissionService'),
-    portListenerManager: container.get('portListenerManager'),
-    agentMemory: container.get('agentMemory'),
-    promptFileManager: container.get('promptFileManager'),
-    agentLoop: container.get('agentLoop'),
-    connectorRuntime: container.get('connectorRuntime'),
-    sessionWorkspace: container.get('sessionWorkspace'),
-    dispatcher: container.get('dispatcher'),
-    agentManager: container.get('agentManager'),
-    pluginManager: container.optional('pluginManager'),
-    taskQueueService: container.optional('taskQueueService'),
-    eventBus: container.get('eventBus'),
-    memoryDaemon: container.get('memoryDaemon'),
-    workflowScheduler: container.get('workflowScheduler'),
-    sessionInitManager: container.get('sessionInitManager'),
-    testClientMode: container.optional('testClientMode') === true,
-    testClientStore: container.optional('testClientStore') || { sessions: new Map(), currentSessionId: null },
-    userIdleDebounceMs: container.optional('userIdleDebounceMs')
-  };
-}
+const { createPolicyIpcMain } = require('./runtime-policy-ipc');
+const {
+  buildAgentRuntime,
+  buildAppControlRuntime,
+  buildChatRuntime,
+  buildLlmRuntime,
+  buildMediaRuntime,
+  buildPluginKnowledgeRuntime,
+  buildSharedRuntime,
+  buildToolsRuntime,
+  buildWorkflowRuntime
+} = require('./runtime-dependencies');
 
 function registerAllHandlers(ipcMain, container) {
-  const runtime = buildRuntime(container);
-  const { db, eventBus, memoryDaemon, workflowScheduler } = runtime;
+  const sharedRuntime = buildSharedRuntime(container);
+  const policyIpcMain = createPolicyIpcMain(ipcMain, sharedRuntime);
+  const { db, eventBus, memoryDaemon, workflowScheduler } = sharedRuntime;
 
-  const configuredDebounceMs = Number(runtime.userIdleDebounceMs);
+  const configuredDebounceMs = Number(sharedRuntime.userIdleDebounceMs);
   const USER_IDLE_DEBOUNCE_MS = Number.isFinite(configuredDebounceMs) && configuredDebounceMs >= 0
     ? configuredDebounceMs
     : 20 * 1000;
@@ -95,15 +73,17 @@ function registerAllHandlers(ipcMain, container) {
     await db.saveSetting('baseinit.daemonEnabled', enabled ? 'true' : 'false');
   }
 
-  registerLlmHandlers(ipcMain, runtime);
-  registerChatDataHandlers(ipcMain, runtime, { markUserActive, markUserIdle });
-  registerToolsCapabilityHandlers(ipcMain, runtime);
-  registerWorkflowHandlers(ipcMain, runtime);
-  registerAgentSystemHandlers(ipcMain, runtime, { syncDaemonEnabledSetting });
-  registerPluginKnowledgeHandlers(ipcMain, runtime);
-  registerDialogHandlers(ipcMain, runtime);
-  registerTtsHandlers(ipcMain, runtime);
-  registerAppControlHandlers(ipcMain, runtime);
+  registerLlmHandlers(policyIpcMain, buildLlmRuntime(sharedRuntime));
+  registerChatDataHandlers(policyIpcMain, buildChatRuntime(sharedRuntime), { markUserActive, markUserIdle });
+  registerToolsCapabilityHandlers(policyIpcMain, buildToolsRuntime(sharedRuntime));
+  registerWorkflowHandlers(policyIpcMain, buildWorkflowRuntime(sharedRuntime));
+  registerAgentSystemHandlers(policyIpcMain, buildAgentRuntime(sharedRuntime), { syncDaemonEnabledSetting });
+  registerSetupSuperagentHandlers(policyIpcMain, buildAgentRuntime(sharedRuntime));
+  registerPluginKnowledgeHandlers(policyIpcMain, buildPluginKnowledgeRuntime(sharedRuntime));
+  registerDialogHandlers(policyIpcMain, buildChatRuntime(sharedRuntime));
+  registerSttHandlers(policyIpcMain, buildMediaRuntime(sharedRuntime));
+  registerTtsHandlers(policyIpcMain, buildMediaRuntime(sharedRuntime));
+  registerAppControlHandlers(policyIpcMain, buildAppControlRuntime(sharedRuntime));
 }
 
 module.exports = { registerAllHandlers };

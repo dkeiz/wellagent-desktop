@@ -19,15 +19,65 @@ class CapabilityManager extends EventEmitter {
         this.loadConfig();
     }
 
+    get settingsKey() {
+        return 'tool.classification.state';
+    }
+
     loadConfig() {
         const configPath = path.join(__dirname, 'tool-classification.json');
         const rawConfig = fs.readFileSync(configPath, 'utf-8');
         this.config = JSON.parse(rawConfig);
+        this.applyStoredState();
+    }
+
+    applyStoredState() {
+        const rawState = this.db?.getSettingSync?.(this.settingsKey);
+        if (!rawState) return;
+
+        let state;
+        try {
+            state = JSON.parse(rawState);
+        } catch (error) {
+            console.warn('[CapabilityManager] Ignoring invalid stored capability state:', error.message);
+            return;
+        }
+
+        if (typeof state?.mainEnabled === 'boolean') {
+            this.config.mainSwitch.enabled = state.mainEnabled;
+        }
+
+        const groups = state?.groups;
+        if (!groups || typeof groups !== 'object') return;
+
+        for (const [groupId, value] of Object.entries(groups)) {
+            const group = this.config.groups[groupId];
+            if (!group) continue;
+
+            if (groupId === 'files') {
+                if (['off', 'read', 'full'].includes(value)) {
+                    group.mode = value;
+                }
+                continue;
+            }
+
+            if (groupId === 'terminal') {
+                if (['off', 'workspace', 'system'].includes(value)) {
+                    group.mode = value;
+                    delete group.enabled;
+                }
+                continue;
+            }
+
+            if (typeof value === 'boolean') {
+                group.enabled = value;
+            }
+        }
     }
 
     saveConfig() {
-        const configPath = path.join(__dirname, 'tool-classification.json');
-        fs.writeFileSync(configPath, JSON.stringify(this.config, null, 2));
+        if (this.db?.setSetting) {
+            void this.db.setSetting(this.settingsKey, JSON.stringify(this.getState()));
+        }
         this.emit('config-changed', this.config);
     }
 
@@ -49,8 +99,8 @@ class CapabilityManager extends EventEmitter {
         const group = this.config.groups[groupId];
         if (!group) return false;
 
-        // Files group uses mode instead of enabled
-        if (groupId === 'files') {
+        // Files and terminal groups use modes instead of enabled booleans.
+        if (groupId === 'files' || groupId === 'terminal') {
             return group.mode !== 'off';
         }
         return group.enabled === true;
@@ -66,8 +116,10 @@ class CapabilityManager extends EventEmitter {
         }
 
         if (groupId === 'files') {
-            // Files uses mode
             group.mode = enabled ? 'read' : 'off';
+        } else if (groupId === 'terminal') {
+            group.mode = enabled ? 'workspace' : 'off';
+            delete group.enabled;
         } else {
             group.enabled = enabled;
         }
@@ -95,6 +147,37 @@ class CapabilityManager extends EventEmitter {
         return mode;
     }
 
+    getTerminalMode() {
+        const group = this.config.groups.terminal || {};
+        if (typeof group.mode === 'string') {
+            return ['off', 'workspace', 'system'].includes(group.mode) ? group.mode : 'workspace';
+        }
+        return group.enabled === false ? 'off' : 'workspace';
+    }
+
+    setTerminalMode(mode) {
+        if (!['off', 'workspace', 'system'].includes(mode)) {
+            throw new Error('Invalid terminal mode. Use: off, workspace, system');
+        }
+
+        if (mode !== 'off' && !this.config.mainSwitch.enabled) {
+            this.config.mainSwitch.enabled = true;
+        }
+
+        if (!this.config.groups.terminal) {
+            this.config.groups.terminal = {
+                name: 'Terminal',
+                description: 'Execute shell commands',
+                icon: '💻',
+                tools: ['run_command']
+            };
+        }
+        this.config.groups.terminal.mode = mode;
+        delete this.config.groups.terminal.enabled;
+        this.saveConfig();
+        return mode;
+    }
+
     // ==================== Tool Access ====================
 
     getActiveTools() {
@@ -113,6 +196,10 @@ class CapabilityManager extends EventEmitter {
             if (groupId === 'files') {
                 // Files group uses mode
                 const modeTools = group.modes[group.mode] || [];
+                modeTools.forEach(tool => activeTools.add(tool));
+            } else if (groupId === 'terminal') {
+                const mode = this.getTerminalMode();
+                const modeTools = group.modes?.[mode] || (mode === 'off' ? [] : group.tools || []);
                 modeTools.forEach(tool => activeTools.add(tool));
             } else if (group.enabled && group.tools) {
                 group.tools.forEach(tool => activeTools.add(tool));
@@ -187,6 +274,8 @@ class CapabilityManager extends EventEmitter {
         for (const [id, group] of Object.entries(this.config.groups)) {
             if (id === 'files') {
                 groups[id] = group.mode; // string: 'off'|'read'|'full'
+            } else if (id === 'terminal') {
+                groups[id] = this.getTerminalMode();
             } else {
                 groups[id] = group.enabled === true;
             }
@@ -202,12 +291,10 @@ class CapabilityManager extends EventEmitter {
     // Returns the group id that owns a given tool name, or null
     getGroupForTool(toolName) {
         for (const [id, group] of Object.entries(this.config.groups)) {
-            if (id === 'files') {
-                // Check all mode arrays
+            if (id === 'files' || id === 'terminal') {
                 const allTools = new Set([
-                    ...(group.modes?.off || []),
-                    ...(group.modes?.read || []),
-                    ...(group.modes?.full || [])
+                    ...Object.values(group.modes || {}).flat(),
+                    ...(group.tools || [])
                 ]);
                 if (allTools.has(toolName)) return id;
             } else if (Array.isArray(group.tools) && group.tools.includes(toolName)) {
@@ -219,20 +306,19 @@ class CapabilityManager extends EventEmitter {
 
     getGroupsConfig() {
         return Object.entries(this.config.groups).map(([id, group]) => {
-            // For files group, compute active tools based on current mode
-            const tools = id === 'files'
-                ? (group.modes?.[group.mode] || [])
-                : (group.tools || []);
+            const isModeGroup = id === 'files' || id === 'terminal';
+            const mode = id === 'terminal' ? this.getTerminalMode() : group.mode;
+            const tools = isModeGroup ? (group.modes?.[mode] || []) : (group.tools || []);
             return {
                 id,
                 name: group.name,
                 description: group.description,
                 icon: group.icon,
-                enabled: id === 'files' ? group.mode !== 'off' : group.enabled === true,
-                mode: id === 'files' ? group.mode : undefined,
-                modes: id === 'files' ? group.modes : undefined,
+                enabled: isModeGroup ? mode !== 'off' : group.enabled === true,
+                mode: isModeGroup ? mode : undefined,
+                modes: isModeGroup ? group.modes : undefined,
                 tools,
-                allTools: id === 'files'
+                allTools: isModeGroup
                     ? Object.values(group.modes || {}).flat()
                     : (group.tools || []),
                 listeners: group.listeners

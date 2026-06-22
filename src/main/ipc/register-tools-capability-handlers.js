@@ -16,18 +16,24 @@ function registerToolsCapabilityHandlers(ipcMain, runtime) {
     }
   });
 
-  ipcMain.handle('get-mcp-tools', async () => mcpServer.getTools());
+  ipcMain.handle('get-mcp-tools', async (event, context = {}) => {
+    if (context?.inventory === true || context?.mode === 'inventory') {
+      return mcpServer.getTools();
+    }
+    if (mcpServer.getToolsForContext) {
+      return mcpServer.getToolsForContext(context || {});
+    }
+    return mcpServer.getTools();
+  });
+  ipcMain.handle('get-mcp-tool-inventory', async () => mcpServer.getTools());
   ipcMain.handle('get-mcp-tools-documentation', async () => mcpServer.getToolsDocumentation());
   ipcMain.handle('get-tool-groups', async () => mcpServer.getToolGroups());
 
   ipcMain.handle('activate-tool-group', async (event, groupId) => {
-    console.log('[IPC] activate-tool-group called with:', groupId);
     try {
       const result = await mcpServer.activateGroup(groupId);
-      console.log('[IPC] Group activated successfully:', result);
       return { success: true, ...result };
     } catch (error) {
-      console.log('[IPC] Group activation failed:', error.message);
       return { success: false, error: error.message };
     }
   });
@@ -56,9 +62,15 @@ function registerToolsCapabilityHandlers(ipcMain, runtime) {
     }
   });
 
-  ipcMain.handle('execute-mcp-tool-once', async (event, toolName, params) => {
+  ipcMain.handle('execute-mcp-tool-once', async (event, toolName, params, options = {}) => {
     try {
-      const result = await mcpServer.executeTool(toolName, params, null, { bypassPermissions: true });
+      const result = await mcpServer.executeTool(toolName, params, null, {
+        allowOutsideExecutionRootOnce: options?.allowOutsideExecutionRootOnce === true
+      });
+      if (result.needsPermission) {
+        windowManager.send('tool-permission-request', result);
+        return { needsPermission: true, toolName, params };
+      }
       return { success: true, result };
     } catch (error) {
       return { success: false, error: error.message };
@@ -210,8 +222,23 @@ function registerToolsCapabilityHandlers(ipcMain, runtime) {
     }
   });
 
+  ipcMain.handle('capability:set-terminal-mode', async (event, mode) => {
+    if (!capabilityManager?.setTerminalMode) return { error: 'CapabilityManager terminal modes unavailable' };
+    try {
+      const result = capabilityManager.setTerminalMode(mode);
+      windowManager.send('capability-update', capabilityManager.getState());
+      return { success: true, mode: result };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   ipcMain.handle('capability:get-active-tools', async (event, context = {}) => {
     if (!toolPermissionService) {
+      if (mcpServer.getActiveToolsForContext) {
+        const tools = await mcpServer.getActiveToolsForContext(context || {});
+        return tools.map((tool) => tool.name).filter(Boolean);
+      }
       if (!capabilityManager) return mcpServer.getActiveTools().map(t => t.name);
       return capabilityManager.getActiveTools().filter((toolName) => {
         const def = mcpServer.tools.get(toolName)?.definition;
@@ -243,6 +270,11 @@ function registerToolsCapabilityHandlers(ipcMain, runtime) {
   ipcMain.handle('permissions:set-agent-tool', async (event, agentId, toolName, active) => {
     if (!toolPermissionService) return { error: 'ToolPermissionService not initialized' };
     return toolPermissionService.setAgentTool(agentId, toolName, active);
+  });
+
+  ipcMain.handle('permissions:apply-agent-preset', async (event, agentId, presetId) => {
+    if (!toolPermissionService) return { error: 'ToolPermissionService not initialized' };
+    return toolPermissionService.applyAgentPreset(agentId, presetId);
   });
 
   ipcMain.handle('permissions:reset-agent-profile', async (event, agentId) => {

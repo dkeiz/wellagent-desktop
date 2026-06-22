@@ -18,10 +18,13 @@
       "search_conversations",
       "search_web_bing",
       "fetch_url",
+      "inner_browser",
       "workflow_op",
       "research_op",
+      "display_content",
       "calendar_op",
       "todo_op",
+      "timer",
       "read_file",
       "list_directory",
       "file_exists",
@@ -51,7 +54,8 @@
       "enabled": true,
       "tools": [
         "search_web_bing",
-        "fetch_url"
+        "fetch_url",
+        "inner_browser"
       ]
     },
     "files": {
@@ -72,7 +76,8 @@
           "file_exists",
           "edit_file",
           "write_file",
-          "delete_file"
+          "delete_file",
+          "execution_root"
         ]
       }
     },
@@ -80,10 +85,16 @@
       "name": "Terminal",
       "description": "Execute shell commands",
       "icon": "💻",
-      "enabled": true,
-      "tools": [
-        "run_command"
-      ]
+      "mode": "system",
+      "modes": {
+        "off": [],
+        "workspace": [
+          "run_command"
+        ],
+        "system": [
+          "run_command"
+        ]
+      }
     },
     "ports": {
       "name": "Connectors & Ports",
@@ -91,7 +102,8 @@
       "icon": "🔌",
       "enabled": true,
       "tools": [
-        "connector_op"
+        "connector_op",
+        "a2a_op"
       ],
       "listeners": []
     },
@@ -99,7 +111,7 @@
       "name": "Visual Capture",
       "description": "Screenshots and image capture",
       "icon": "📸",
-      "enabled": false,
+      "enabled": true,
       "tools": [
         "screenshot"
       ]

@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { buildRuntimePaths } = require('./runtime-paths');
 
 function normalizePluginName(rawName = '') {
   return String(rawName || '')
@@ -39,7 +40,7 @@ function writeManagedFile(filePath, content, markers = []) {
 }
 
 function getBundledSearxngPath(fileName) {
-  return path.join(__dirname, '../../agentin/plugins/searxng-search', fileName);
+  return path.join(buildRuntimePaths().bundledAgentinRoot, 'plugins', 'searxng-search', fileName);
 }
 
 function searxngManifest() {

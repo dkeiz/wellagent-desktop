@@ -135,13 +135,13 @@ document.addEventListener('DOMContentLoaded', () => {
     window.shortcuts = new ShortcutsManager();
 
     setTimeout(() => {
-        document.getElementById('show-shortcuts-btn')?.addEventListener('click', () => {
-            window.shortcuts.showHelp();
-        });
+        const bindShortcuts = () => window.shortcuts.showHelp();
+        document.getElementById('show-shortcuts-btn')?.addEventListener('click', bindShortcuts);
+        document.getElementById('statusbar-show-shortcuts-btn')?.addEventListener('click', bindShortcuts);
 
-        document.getElementById('show-stats-btn')?.addEventListener('click', () => {
-            window.statsTracker?.showStats();
-        });
+        const bindStats = () => window.statsTracker?.showStats();
+        document.getElementById('show-stats-btn')?.addEventListener('click', bindStats);
+        document.getElementById('statusbar-show-stats-btn')?.addEventListener('click', bindStats);
     }, 1000);
 });
 

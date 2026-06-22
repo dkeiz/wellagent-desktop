@@ -6,9 +6,20 @@ const { registerFileTools } = require('./mcp/register-file-tools');
 const { registerMediaTools } = require('./mcp/register-media-tools');
 const { registerPromptTools } = require('./mcp/register-prompt-tools');
 const { registerTerminalTools } = require('./mcp/register-terminal-tools');
+const { registerTimerTools } = require('./mcp/register-timer-tools');
 const { registerWebSystemTools } = require('./mcp/register-web-system-tools');
 const { registerWorkflowTools } = require('./mcp/register-workflow-tools');
 const { registerResearchTools } = require('./mcp/register-research-tools');
+const { registerA2ATools } = require('./mcp/register-a2a-tools');
+const { parseToolCall } = require('./mcp/tool-call-parser');
+const {
+  normalizeCustomToolSandboxPolicy,
+  runCustomToolInSandbox
+} = require('./custom-tool-sandbox');
+const {
+  assessPrivateTool,
+  getPrivateSessionId
+} = require('./private-execution-policy');
 
 const BUILT_IN_TOOL_REGISTRARS = [
   registerCoreTools,
@@ -17,6 +28,8 @@ const BUILT_IN_TOOL_REGISTRARS = [
   registerConnectorTools,
   registerWorkflowTools,
   registerResearchTools,
+  registerA2ATools,
+  registerTimerTools,
   registerFileTools,
   registerWebSystemTools,
   registerMediaTools,
@@ -34,6 +47,7 @@ class MCPServer extends EventEmitter {
     this.proxyServers = new Map();
     this._executionContextStack = [];
     this._currentAgentContext = null;
+    this.runtimePolicy = null;
     this.toolPermissionService = null;
     this.initializeBuiltInTools();
   }
@@ -81,12 +95,45 @@ class MCPServer extends EventEmitter {
     this._connectorRuntime = connectorRuntime;
   }
 
+  setA2AManager(a2aManager) {
+    this._a2aManager = a2aManager || null;
+  }
+
+  setTimerManager(timerManager) {
+    this._timerManager = timerManager || null;
+  }
+
   setPromptFileManager(promptFileManager) {
     this._promptFileManager = promptFileManager;
   }
 
   setSessionWorkspace(sessionWorkspace) {
     this._sessionWorkspace = sessionWorkspace;
+  }
+
+  setArtifactRegistry(artifactRegistry) {
+    this._artifactRegistry = artifactRegistry || null;
+  }
+
+  setExecutionDirectory(executionDirectory) {
+    this._executionDirectory = executionDirectory || null;
+  }
+
+  setRuntimePolicy(runtimePolicy) {
+    this.runtimePolicy = runtimePolicy || null;
+  }
+
+  async getExecutionRoot() {
+    return this._executionDirectory?.getRoot
+      ? this._executionDirectory.getRoot()
+      : process.cwd();
+  }
+
+  async assertExecutionPathAllowed(pathValue, options = {}) {
+    if (!this._executionDirectory?.assertPathAllowed) {
+      return true;
+    }
+    return this._executionDirectory.assertPathAllowed(pathValue, options);
   }
 
   setWorkflowManager(workflowManager) {
@@ -159,6 +206,24 @@ class MCPServer extends EventEmitter {
   _resolveTimeoutMs(toolName, params, defaultTimeoutMs) {
     const baseTimeout = Math.max(1, Number(defaultTimeoutMs) || 5000);
     const normalizedName = String(toolName || '').trim();
+    if (normalizedName === 'run_command') {
+      const requestedTimeoutMs = Number(params?.timeout_ms);
+      if (Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0) {
+        return Math.ceil(requestedTimeoutMs);
+      }
+      const requestedTimeoutSeconds = Number(params?.timeout);
+      if (Number.isFinite(requestedTimeoutSeconds) && requestedTimeoutSeconds > 0) {
+        return Math.ceil(requestedTimeoutSeconds * 1000);
+      }
+      return 30000;
+    }
+    if (normalizedName === 'inner_browser') {
+      const requestedTimeoutMs = Number(params?.timeout_ms);
+      if (Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0) {
+        return Math.ceil(requestedTimeoutMs);
+      }
+      return Math.max(baseTimeout, 15000);
+    }
     const requestedTimeout = Math.max(1, Number(params?.timeout_ms) || 0);
     const isAwaitedSubagent = (
       (normalizedName === 'subagent' || normalizedName === 'run_subagent')
@@ -181,7 +246,9 @@ class MCPServer extends EventEmitter {
     const activeContext = executionContext || this.getCurrentAgentContext() || null;
     const tool = this.tools.get(toolName);
     if (!tool) {
-      this.emit('tool-executed', { toolName, success: false, error: 'Tool not found' });
+      if (!getPrivateSessionId(this, activeContext)) {
+        this.emit('tool-executed', { toolName, success: false, error: 'Tool not found' });
+      }
       throw new Error(`Tool not found: ${toolName}`);
     }
 
@@ -191,11 +258,29 @@ class MCPServer extends EventEmitter {
     );
     if (!allowedForAgent) {
       const scopedError = `Tool "${toolName}" is not allowed for the active agent scope`;
-      this.emit('tool-executed', { toolName, success: false, error: scopedError });
+      if (!getPrivateSessionId(this, activeContext)) {
+        this.emit('tool-executed', { toolName, success: false, error: scopedError });
+      }
       throw new Error(scopedError);
     }
 
     const isInternalTool = tool.definition?.internal === true;
+    const privateAssessment = await assessPrivateTool(this, toolName, tool, params, activeContext);
+    const suppressTrace = privateAssessment.privateMode && options.tracePrivate !== true;
+
+    if (this.runtimePolicy?.assert && !isInternalTool) {
+      this.runtimePolicy.assert({
+        principal: activeContext?.principal || null,
+        profile: activeContext?.runtimePolicyProfile || activeContext?.policyProfile || null,
+        action: 'tool.execute',
+        resource: toolName,
+        context: activeContext || {},
+        metadata: {
+          toolName,
+          definition: tool.definition
+        }
+      });
+    }
 
     if (!bypassPermissions && !isInternalTool) {
       if (this.toolPermissionService) {
@@ -261,12 +346,31 @@ class MCPServer extends EventEmitter {
 
       const configuredTimeoutMs = parseInt(await this.db.getSetting('tool_timeout_ms') || '5000', 10);
       const timeoutMs = this._resolveTimeoutMs(toolName, params, configuredTimeoutMs);
+      const invokeHandler = () => Promise.resolve().then(() => tool.handler(params, {
+        timeoutMs,
+        toolName,
+        context: activeContext,
+        allowOutsideExecutionRoot: options.allowOutsideExecutionRoot === true
+          || options.allowOutsideExecutionRootOnce === true
+      }));
+      const runToolHandler = () => this.executeWithTimeout(invokeHandler(), timeoutMs, toolName);
       const result = executionContext
         ? await this.withExecutionContext(
           executionContext,
-          () => this.executeWithTimeout(tool.handler(params), timeoutMs, toolName)
+          runToolHandler
         )
-        : await this.executeWithTimeout(tool.handler(params), timeoutMs, toolName);
+        : await runToolHandler();
+
+      if (result && result.needsPermission) {
+        return {
+          ...result,
+          toolName: result.toolName || toolName,
+          params: result.params || params,
+          toolDefinition: result.toolDefinition || tool.definition,
+          sessionId: result.sessionId ?? activeContext?.sessionId ?? this.getCurrentSessionId(),
+          agentId: result.agentId ?? activeContext?.agentId ?? null
+        };
+      }
 
       if (toolName.startsWith('calendar_')) this.emit('calendar-update');
       else if (toolName.startsWith('todo_')) this.emit('todo-update');
@@ -283,7 +387,9 @@ class MCPServer extends EventEmitter {
         result
       };
 
-      this.emit('tool-executed', enrichedResult);
+      if (!suppressTrace) {
+        this.emit('tool-executed', enrichedResult);
+      }
       return enrichedResult;
     } catch (error) {
       const errorResult = {
@@ -297,7 +403,9 @@ class MCPServer extends EventEmitter {
         params,
         error: error.message
       };
-      this.emit('tool-executed', errorResult);
+      if (!suppressTrace) {
+        this.emit('tool-executed', errorResult);
+      }
       throw error;
     }
   }
@@ -352,361 +460,7 @@ class MCPServer extends EventEmitter {
   }
 
   parseToolCall(text) {
-    const source = String(text || '');
-    const calls = [];
-    const invalidCandidates = [];
-    const acceptedKeys = new Set();
-    const toolPrefix = /TOOL\s*:\s*([A-Za-z0-9_]+)/gi;
-    let match;
-
-    while ((match = toolPrefix.exec(source)) !== null) {
-      const previousChar = match.index > 0 ? source[match.index - 1] : '';
-      const isBoundary = !previousChar || /\s|[`"'([{<]/.test(previousChar);
-      if (!isBoundary) {
-        continue;
-      }
-
-      const toolName = match[1];
-      const afterTool = source.slice(match.index + match[0].length);
-      const parsed = this._extractJsonObject(afterTool);
-      if (!parsed.ok) {
-        invalidCandidates.push({
-          toolName,
-          reason: parsed.reason,
-          snippet: source.slice(match.index, Math.min(source.length, match.index + 220))
-        });
-        continue;
-      }
-
-      const validated = this._validateParsedToolCall(toolName, parsed.params);
-      if (!validated.ok) {
-        invalidCandidates.push({
-          toolName,
-          reason: validated.reason,
-          snippet: source.slice(match.index, Math.min(source.length, match.index + 220))
-        });
-        continue;
-      }
-
-      const toolCallId = `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const acceptedKey = `${toolName}:${JSON.stringify(validated.params)}`;
-      if (acceptedKeys.has(acceptedKey)) {
-        continue;
-      }
-      acceptedKeys.add(acceptedKey);
-      calls.push({
-        toolName,
-        params: validated.params,
-        toolCallId,
-        timestamp: new Date().toISOString()
-      });
-    }
-
-    // Recovery pass: tolerate malformed call shapes like:
-    // search_web_bing."query":"...","max_results":5}
-    for (const [toolName] of this.tools) {
-      const escapedTool = toolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const loosePattern = new RegExp(`\\b${escapedTool}\\b`, 'gi');
-      let looseMatch;
-
-      while ((looseMatch = loosePattern.exec(source)) !== null) {
-        const before = looseMatch.index > 0 ? source[looseMatch.index - 1] : '';
-        const afterStart = looseMatch.index + looseMatch[0].length;
-        const after = source.slice(afterStart);
-
-        // Skip already explicit TOOL:name forms (handled above).
-        if (before === ':') {
-          continue;
-        }
-
-        const startsLikeParams = /^\s*(\{|\.)/.test(after);
-        if (!startsLikeParams) {
-          continue;
-        }
-
-        const parsed = this._extractLooseKeyValueObject(after);
-        if (!parsed.ok) {
-          invalidCandidates.push({
-            toolName,
-            reason: parsed.reason,
-            snippet: source.slice(looseMatch.index, Math.min(source.length, looseMatch.index + 220))
-          });
-          continue;
-        }
-
-        const validated = this._validateParsedToolCall(toolName, parsed.params);
-        if (!validated.ok) {
-          invalidCandidates.push({
-            toolName,
-            reason: validated.reason,
-            snippet: source.slice(looseMatch.index, Math.min(source.length, looseMatch.index + 220))
-          });
-          continue;
-        }
-
-        const acceptedKey = `${toolName}:${JSON.stringify(validated.params)}`;
-        if (acceptedKeys.has(acceptedKey)) {
-          continue;
-        }
-        acceptedKeys.add(acceptedKey);
-        calls.push({
-          toolName,
-          params: validated.params,
-          toolCallId: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          timestamp: new Date().toISOString()
-        });
-      }
-    }
-
-    this._lastInvalidToolCandidates = invalidCandidates;
-    if (invalidCandidates.length > 0) {
-      console.warn(`[MCP] Ignored ${invalidCandidates.length} malformed/non-executable tool candidate(s)`);
-    }
-
-    return calls;
-  }
-
-  _extractJsonObject(text) {
-    let candidate = String(text || '').trimStart();
-    if (!candidate) {
-      return { ok: false, reason: 'missing_params_json' };
-    }
-
-    if (candidate.startsWith('```')) {
-      const firstNewline = candidate.indexOf('\n');
-      if (firstNewline !== -1) {
-        candidate = candidate.slice(firstNewline + 1).trimStart();
-        const fenceEnd = candidate.indexOf('```');
-        if (fenceEnd !== -1) {
-          candidate = candidate.slice(0, fenceEnd).trim();
-        }
-      }
-    }
-
-    const jsonStart = candidate.indexOf('{');
-    if (jsonStart === -1) {
-      return { ok: false, reason: 'missing_json_object' };
-    }
-    candidate = candidate.slice(jsonStart);
-
-    let depth = 0;
-    let end = 0;
-    let inString = false;
-    let escapeNext = false;
-
-    for (let i = 0; i < candidate.length; i++) {
-      const char = candidate[i];
-      if (escapeNext) {
-        escapeNext = false;
-        continue;
-      }
-      if (char === '\\') {
-        escapeNext = true;
-        continue;
-      }
-      if (char === '"' && !escapeNext) {
-        inString = !inString;
-        continue;
-      }
-
-      if (!inString) {
-        if (char === '{') {
-          depth++;
-        } else if (char === '}') {
-          depth--;
-          if (depth === 0) {
-            end = i + 1;
-            break;
-          }
-        }
-      }
-    }
-
-    if (end === 0) {
-      return { ok: false, reason: 'unclosed_json_object' };
-    }
-
-    let params;
-    try {
-      params = JSON.parse(candidate.slice(0, end));
-    } catch (error) {
-      const repaired = this._repairJsonForWindowsPaths(candidate.slice(0, end));
-      if (!repaired) {
-        return { ok: false, reason: 'invalid_json' };
-      }
-      try {
-        params = JSON.parse(repaired);
-      } catch (_) {
-        return { ok: false, reason: 'invalid_json' };
-      }
-    }
-
-    if (!params || typeof params !== 'object' || Array.isArray(params)) {
-      return { ok: false, reason: 'params_not_object' };
-    }
-
-    return { ok: true, params };
-  }
-
-  _repairJsonForWindowsPaths(jsonText) {
-    const input = String(jsonText || '');
-    if (!input.includes('\\')) {
-      return null;
-    }
-    const looksLikeWindowsPath = (value) => /^[A-Za-z]:\\/.test(value) || value.startsWith('\\\\');
-
-    const normalizePathLiteral = (raw) => {
-      let out = '';
-      let localChanged = false;
-      for (let i = 0; i < raw.length; i++) {
-        const ch = raw[i];
-        if (ch !== '\\') {
-          out += ch;
-          continue;
-        }
-        const next = raw[i + 1];
-        if (next === '\\') {
-          out += '\\\\';
-          i++;
-          continue;
-        }
-        out += '\\\\';
-        localChanged = true;
-      }
-      return { out, changed: localChanged };
-    };
-
-    const normalizeGenericLiteral = (raw) => {
-      let out = '';
-      let localChanged = false;
-      for (let i = 0; i < raw.length; i++) {
-        const ch = raw[i];
-        if (ch !== '\\') {
-          out += ch;
-          continue;
-        }
-        const next = raw[i + 1] || '';
-        if (/["\\/bfnrtu]/.test(next)) {
-          out += `\\${next}`;
-          i++;
-          continue;
-        }
-        out += '\\\\';
-        localChanged = true;
-      }
-      return { out, changed: localChanged };
-    };
-
-    let output = '';
-    let changed = false;
-
-    for (let i = 0; i < input.length; i++) {
-      const ch = input[i];
-      if (ch !== '"') {
-        output += ch;
-        continue;
-      }
-
-      output += ch;
-      i++;
-      let raw = '';
-      let escaped = false;
-      for (; i < input.length; i++) {
-        const cur = input[i];
-        if (!escaped && cur === '"') {
-          break;
-        }
-        raw += cur;
-        if (cur === '\\' && !escaped) {
-          escaped = true;
-        } else {
-          escaped = false;
-        }
-      }
-
-      const normalizer = looksLikeWindowsPath(raw) ? normalizePathLiteral : normalizeGenericLiteral;
-      const normalized = normalizer(raw);
-      changed = changed || normalized.changed;
-      output += normalized.out;
-
-      if (i < input.length && input[i] === '"') {
-        output += '"';
-      }
-    }
-
-    return changed ? output : null;
-  }
-
-  _extractLooseKeyValueObject(text) {
-    let candidate = String(text || '').trimStart();
-    if (!candidate) {
-      return { ok: false, reason: 'missing_loose_params' };
-    }
-
-    if (candidate.startsWith('```')) {
-      const firstNewline = candidate.indexOf('\n');
-      if (firstNewline !== -1) {
-        candidate = candidate.slice(firstNewline + 1).trimStart();
-        const fenceEnd = candidate.indexOf('```');
-        if (fenceEnd !== -1) {
-          candidate = candidate.slice(0, fenceEnd).trim();
-        }
-      }
-    }
-
-    if (candidate.startsWith('{')) {
-      return this._extractJsonObject(candidate);
-    }
-
-    if (candidate.startsWith('.')) {
-      candidate = candidate.slice(1).trimStart();
-    }
-
-    const firstLine = candidate.split(/\r?\n/)[0].trim();
-    if (!firstLine || !firstLine.startsWith('"')) {
-      return { ok: false, reason: 'missing_loose_object_body' };
-    }
-
-    let body = firstLine;
-    if (body.endsWith('}')) {
-      body = body.slice(0, -1).trimEnd();
-    }
-
-    try {
-      const params = JSON.parse(`{${body}}`);
-      if (!params || typeof params !== 'object' || Array.isArray(params)) {
-        return { ok: false, reason: 'loose_params_not_object' };
-      }
-      return { ok: true, params };
-    } catch (_) {
-      return { ok: false, reason: 'invalid_loose_json' };
-    }
-  }
-
-  _validateParsedToolCall(toolName, params) {
-    const tool = this.tools.get(toolName);
-    if (!tool) {
-      return { ok: false, reason: 'unknown_tool' };
-    }
-
-    const normalized = JSON.parse(JSON.stringify(params || {}));
-    if (tool.definition.inputSchema?.properties) {
-      for (const [key, prop] of Object.entries(tool.definition.inputSchema.properties)) {
-        if (normalized[key] === undefined && prop.default !== undefined) {
-          normalized[key] = prop.default;
-        }
-      }
-    }
-
-    if (tool.definition.inputSchema) {
-      try {
-        this.validateInput(normalized, tool.definition.inputSchema);
-      } catch (error) {
-        return { ok: false, reason: `schema_validation_failed:${error.message}` };
-      }
-    }
-
-    return { ok: true, params: normalized };
+    return parseToolCall(this, text);
   }
 
   async executeToolCalls(text) {
@@ -1010,14 +764,21 @@ class MCPServer extends EventEmitter {
   }
 
   registerCustomTool(tool) {
-    const handler = new Function('params', tool.code);
+    const code = String(tool.code || '');
+    const sandboxPolicy = normalizeCustomToolSandboxPolicy(tool);
     this.registerTool(tool.name, {
       name: tool.name,
       description: tool.description,
       userDescription: tool.description,
       inputSchema: tool.input_schema || { type: 'object' },
-      isCustom: true
-    }, async (params) => handler(params));
+      isCustom: true,
+      sandboxPolicy
+    }, async (params, execution = {}) => runCustomToolInSandbox({
+      toolName: tool.name,
+      code,
+      params,
+      timeoutMs: execution.timeoutMs
+    }));
 
     if (this.capabilityManager) {
       this.capabilityManager.registerCustomTool(tool.name, false);

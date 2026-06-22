@@ -170,6 +170,10 @@ async function stopBackend(runtime) {
 }
 
 async function startBackend(runtime, context) {
+  if (process.env.LOCALAGENT_ELECTRON_APP_RUNTIME !== '1') {
+    throw new Error('Voice backend may only be started by the Electron application runtime.');
+  }
+
   if (runtime.ready && runtime.process) {
     return getBackendStatus(runtime);
   }
@@ -204,6 +208,7 @@ async function startBackend(runtime, context) {
       TTS_ENGINE: 'auto',
       ENABLE_CORS: 'true',
       DEFER_MODEL_LOAD_ON_STARTUP: 'true',
+      LOCALAGENT_VOICE_BACKEND_PARENT: 'electron-app',
       MODEL_PATH_OVERRIDES_JSON: JSON.stringify(config.modelPathOverrides)
     };
 

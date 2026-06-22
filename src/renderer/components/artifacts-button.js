@@ -21,21 +21,8 @@
         return String(tabId || '').startsWith(ARTIFACT_TAB_PREFIX);
     }
 
-    function emitActiveTabChanged(panel) {
-        const sessionId = panel?.activeTabId ?? null;
-        const tab = (sessionId !== null && sessionId !== undefined)
-            ? panel.chatTabs.get(sessionId)
-            : null;
-        document.dispatchEvent(new CustomEvent('chat-tab-switched', {
-            detail: {
-                sessionId,
-                agentId: tab?.agentId ?? null
-            }
-        }));
-    }
-
     function getActiveSessionId() {
-        return window.mainPanel?.activeTabId || null;
+        return window.localAgentRendererShell?.getMainPanel?.()?.activeTabId || window.mainPanel?.activeTabId || null;
     }
 
     function buildPopover() {
@@ -45,7 +32,7 @@
         popover.innerHTML = `
             <div class="artifacts-popover-title" id="artifacts-popover-title">Artifacts</div>
             <div class="artifacts-popover-list" id="artifacts-popover-list"></div>
-            <div class="artifacts-popover-empty hidden" id="artifacts-popover-empty">No files in this conversation yet.</div>
+            <div class="artifacts-popover-empty hidden" id="artifacts-popover-empty">No artifacts in this conversation yet.</div>
         `;
         return popover;
     }
@@ -140,21 +127,17 @@
         }
     }
 
-    function installTabPatches(panel, refreshArtifactsState) {
-        if (!panel || !window.mainPanelTabs || window.mainPanelTabs.__artifactsPatched === true) return;
+    function installTabPatches(refreshArtifactsState) {
+        const shell = window.localAgentRendererShell;
+        if (!shell || shell.__artifactsPatched === true) return;
+        shell.__artifactsPatched = true;
 
-        const originalSwitchTab = window.mainPanelTabs.switchTab;
-        const originalSaveCurrent = window.mainPanelTabs.saveCurrentTabMessages;
-        const originalCloseTab = window.mainPanelTabs.closeTab;
-        const originalSwitchChatSession = window.electronAPI.switchChatSession;
-        const originalSendMessage = panel.sendMessage.bind(panel);
-
-        window.electronAPI.switchChatSession = async (sessionId) => {
+        shell.registerBridgeMethodWrapper('switchChatSession', 'artifacts', (originalSwitchChatSession) => async (sessionId) => {
             if (isArtifactTabId(sessionId)) return { success: true, skipped: true };
             return originalSwitchChatSession(sessionId);
-        };
+        });
 
-        window.mainPanelTabs.saveCurrentTabMessages = function patchedSaveCurrent(p) {
+        shell.registerTabMethodWrapper('saveCurrentTabMessages', 'artifacts', (originalSaveCurrent) => function patchedSaveCurrent(p) {
             const activeId = p.activeTabId;
             const activeDoc = docsByTabId.get(activeId);
             if (activeDoc && activeDoc.kind === 'text') {
@@ -170,9 +153,9 @@
                 }
             }
             return originalSaveCurrent(p);
-        };
+        });
 
-        window.mainPanelTabs.saveOpenTabIds = async function patchedSaveOpen(p) {
+        shell.registerTabMethodWrapper('saveOpenTabIds', 'artifacts', () => async function patchedSaveOpen(p) {
             const ids = [...p.chatTabs.keys()].filter(id => (
                 String(id) !== 'subagent-manager' &&
                 String(id) !== 'superagent-manager' &&
@@ -186,9 +169,9 @@
             } catch (error) {
                 console.error('Error saving open tabs:', error);
             }
-        };
+        });
 
-        window.mainPanelTabs.switchTab = async function patchedSwitchTab(p, sessionId) {
+        shell.registerTabMethodWrapper('switchTab', 'artifacts', (originalSwitchTab) => async function patchedSwitchTab(p, sessionId) {
             const targetTab = p.chatTabs.get(sessionId);
             const isArtifactTarget = Boolean(targetTab?.isArtifactTab);
             if (isArtifactTarget) {
@@ -201,23 +184,23 @@
             if (isArtifactTarget) {
                 bindArtifactEditor(p, sessionId, refreshArtifactsState);
             }
-        };
+        });
 
-        window.mainPanelTabs.closeTab = async function patchedCloseTab(p, sessionId) {
+        shell.registerTabMethodWrapper('closeTab', 'artifacts', (originalCloseTab) => async function patchedCloseTab(p, sessionId) {
             await originalCloseTab(p, sessionId);
             if (isArtifactTabId(sessionId)) {
                 docsByTabId.delete(sessionId);
             }
-        };
+        });
 
-        panel.sendMessage = async function patchedSendMessage() {
+        shell.registerPanelMethodWrapper('sendMessage', 'artifacts', (originalSendMessage) => async function patchedSendMessage() {
             const active = this.chatTabs.get(this.activeTabId);
             if (active?.isArtifactTab) {
                 this.showNotification('Artifact tab is file-view mode. Switch to a chat tab to send messages.', 'info');
                 return;
             }
             return originalSendMessage();
-        };
+        });
 
         const tabsList = document.getElementById('chat-tabs-list');
         if (tabsList) {
@@ -226,47 +209,68 @@
                 if (!resetBtn) return;
                 const tabEl = resetBtn.closest('.chat-tab');
                 const tabId = tabEl?.dataset?.sessionId;
-                const tab = tabId ? panel.chatTabs.get(tabId) : null;
+                const panel = shell.getMainPanel?.();
+                const tab = tabId ? panel?.chatTabs?.get?.(tabId) : null;
                 if (tab?.isArtifactTab) {
                     event.preventDefault();
                     event.stopPropagation();
                     event.stopImmediatePropagation();
-                    window.mainPanelTabs.closeTab(panel, tabId);
+                    shell.getTabApi?.()?.closeTab(panel, tabId);
                 }
             }, true);
         }
-
-        window.mainPanelTabs.__artifactsPatched = true;
     }
 
     async function initArtifactsButton() {
         const button = document.getElementById('artifacts-btn');
-        const providerRow = document.querySelector('.chat-provider-row');
-        if (!button || !providerRow || !window.electronAPI?.getSessionArtifacts) return;
+        if (!button || !window.electronAPI?.getSessionArtifacts) return;
+        let refreshRequestId = 0;
 
         const popover = buildPopover();
-        providerRow.appendChild(popover);
         const titleEl = popover.querySelector('#artifacts-popover-title');
         const listEl = popover.querySelector('#artifacts-popover-list');
         const emptyEl = popover.querySelector('#artifacts-popover-empty');
+
+        function resolveAnchor() {
+            return button.parentElement || document.querySelector('.chat-provider-row');
+        }
+
+        function syncPopoverAnchor() {
+            const anchor = resolveAnchor();
+            if (anchor && popover.parentElement !== anchor) {
+                anchor.appendChild(popover);
+            }
+        }
+
+        syncPopoverAnchor();
 
         function closePopover() {
             popover.classList.add('hidden');
             button.setAttribute('aria-expanded', 'false');
         }
 
+        function shouldRefreshForSession(sessionId) {
+            const activeSessionId = getActiveSessionId();
+            return !sessionId || !activeSessionId || sessionId === activeSessionId;
+        }
+
         async function refreshArtifactsState() {
+            const requestId = ++refreshRequestId;
             const sessionId = getActiveSessionId();
-            const tab = sessionId ? window.mainPanel?.chatTabs?.get?.(sessionId) : null;
+            const panel = window.localAgentRendererShell?.getMainPanel?.() || window.mainPanel;
+            const tab = sessionId ? panel?.chatTabs?.get?.(sessionId) : null;
             if (!sessionId || sessionId === 'subagent-manager' || sessionId === 'superagent-manager' || tab?.isArtifactTab) {
                 button.classList.remove('has-artifacts');
                 button.title = 'Artifacts (0 files for conversation)';
                 return;
             }
             const result = await window.electronAPI.getSessionArtifacts(sessionId);
+            if (requestId !== refreshRequestId || getActiveSessionId() !== sessionId) {
+                return;
+            }
             const files = Array.isArray(result?.files) ? result.files : [];
             button.classList.toggle('has-artifacts', files.length > 0);
-            button.title = `Artifacts (${files.length} files for conversation)`;
+            button.title = `Artifacts (${files.length} items for conversation)`;
             if (popover.classList.contains('hidden')) return;
 
             titleEl.textContent = `Artifacts (${files.length})`;
@@ -276,16 +280,59 @@
                 return;
             }
             emptyEl.classList.add('hidden');
-            listEl.innerHTML = files.map(file => (
-                `<button type="button" class="artifacts-popover-item" data-artifact-name="${escapeHtml(file.name)}" title="${escapeHtml(file.name)} • ${formatSize(file.size)}">${escapeHtml(file.name)}</button>`
-            )).join('');
+            listEl.innerHTML = files.map(file => {
+                const nameStr = escapeHtml(file.name);
+                const isVirtual = file.virtual === true;
+                const isAccepted = file.accepted === true;
+                const actionLabel = file.action === 'edited' ? '✏' : file.action === 'deleted' ? '🗑' : '';
+                const sourceLabel = file.source ? `<span class="artifact-source">${escapeHtml(file.source)}</span>` : '';
+                const acceptedClass = isAccepted ? ' accepted' : '';
+                const virtualClass = isVirtual ? ' virtual' : '';
+                const keyAttr = file.key ? `data-artifact-key="${escapeHtml(file.key)}"` : '';
+                return `<div class="artifacts-popover-item${acceptedClass}${virtualClass}" ${keyAttr} data-artifact-name="${nameStr}" data-artifact-virtual="${isVirtual}" title="${nameStr}">
+                    <span class="artifact-item-name">${actionLabel}${nameStr}</span>
+                    ${sourceLabel}
+                    <span class="artifact-item-actions">
+                        <button type="button" class="artifact-action-btn artifact-accept-btn${isAccepted ? ' active' : ''}" data-action="accept" title="Accept">✓</button>
+                        <button type="button" class="artifact-action-btn artifact-clean-btn" data-action="clean" title="Clean">✕</button>
+                    </span>
+                </div>`;
+            }).join('');
 
-            listEl.querySelectorAll('[data-artifact-name]').forEach(item => {
-                item.addEventListener('click', async () => {
-                    const panel = window.mainPanel;
+            listEl.querySelectorAll('.artifact-action-btn').forEach(btn => {
+                btn.addEventListener('click', async (event) => {
+                    event.stopPropagation();
+                    const action = btn.dataset.action;
+                    const row = btn.closest('.artifacts-popover-item');
+                    const artifactKey = row?.dataset?.artifactKey || '';
+                    const currentSessionId = getActiveSessionId();
+                    if (!currentSessionId || !artifactKey) return;
+                    if (action === 'accept') {
+                        await window.electronAPI.acceptArtifact(currentSessionId, artifactKey);
+                        btn.classList.add('active');
+                        row.classList.add('accepted');
+                    } else if (action === 'clean') {
+                        await window.electronAPI.cleanArtifact(currentSessionId, artifactKey);
+                        row.remove();
+                        const remaining = listEl.querySelectorAll('.artifacts-popover-item');
+                        if (!remaining.length) {
+                            emptyEl.classList.remove('hidden');
+                            button.classList.remove('has-artifacts');
+                        }
+                        titleEl.textContent = `Artifacts (${remaining.length})`;
+                    }
+                });
+            });
+
+            listEl.querySelectorAll('.artifacts-popover-item').forEach(item => {
+                item.addEventListener('click', async (event) => {
+                    if (event.target.closest('.artifact-action-btn')) return;
+                    const panel = window.localAgentRendererShell?.getMainPanel?.() || window.mainPanel;
                     if (!panel) return;
                     const currentSessionId = getActiveSessionId();
                     if (!currentSessionId || isArtifactTabId(currentSessionId)) return;
+                    const isVirtual = item.dataset.artifactVirtual === 'true';
+                    if (isVirtual) return;
                     const fileName = item.dataset.artifactName || '';
                     const read = await window.electronAPI.readSessionArtifact(currentSessionId, fileName);
                     if (!read?.success) {
@@ -321,8 +368,8 @@
                         panel.saveOpenTabIds?.();
                     }
 
-                    installTabPatches(panel, refreshArtifactsState);
-                    await window.mainPanelTabs.switchTab(panel, tabId);
+                    installTabPatches(refreshArtifactsState);
+                    await window.localAgentRendererShell?.getTabApi?.()?.switchTab(panel, tabId);
                     bindArtifactEditor(panel, tabId, refreshArtifactsState);
                     closePopover();
                 });
@@ -331,6 +378,7 @@
 
         button.addEventListener('click', async (event) => {
             event.preventDefault();
+            syncPopoverAnchor();
             const willOpen = popover.classList.contains('hidden');
             if (willOpen) {
                 await refreshArtifactsState();
@@ -350,20 +398,29 @@
 
         document.addEventListener('chat-tab-switched', async (event) => {
             const tabId = event?.detail?.sessionId;
-            const tab = tabId ? window.mainPanel?.chatTabs?.get?.(tabId) : null;
+            const panel = window.localAgentRendererShell?.getMainPanel?.() || window.mainPanel;
+            const tab = tabId ? panel?.chatTabs?.get?.(tabId) : null;
             if (tab?.isArtifactTab) {
-                bindArtifactEditor(window.mainPanel, tabId, refreshArtifactsState);
+                bindArtifactEditor(panel, tabId, refreshArtifactsState);
             }
             await refreshArtifactsState();
         });
 
         if (window.electronAPI.onConversationUpdate) {
-            window.electronAPI.onConversationUpdate(async () => {
+            window.electronAPI.onConversationUpdate(async (_event, detail = {}) => {
+                if (!shouldRefreshForSession(detail?.sessionId)) return;
                 await refreshArtifactsState();
             });
         }
 
-        installTabPatches(window.mainPanel, refreshArtifactsState);
+        if (window.electronAPI.onArtifactUpdate) {
+            window.electronAPI.onArtifactUpdate(async (_event, detail = {}) => {
+                if (!shouldRefreshForSession(detail?.sessionId)) return;
+                await refreshArtifactsState();
+            });
+        }
+
+        installTabPatches(refreshArtifactsState);
         await refreshArtifactsState();
     }
 
@@ -372,7 +429,7 @@
         let attempt = 0;
         const timer = setInterval(() => {
             attempt += 1;
-            if (window.mainPanel && window.mainPanelTabs) {
+            if (window.localAgentRendererShell?.getMainPanel?.() && window.localAgentRendererShell?.getTabApi?.()) {
                 clearInterval(timer);
                 initArtifactsButton().catch(error => {
                     console.error('Failed to initialize artifacts button:', error);

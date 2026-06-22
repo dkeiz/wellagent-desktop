@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { buildRuntimePaths } = require('./runtime-paths');
 const {
   appendJsonLine,
   appendTraceSection,
@@ -17,7 +18,7 @@ class ResearchRuntime {
     this.workflowManager = workflowManager;
     this.knowledgeManager = knowledgeManager;
     this.eventBus = eventBus;
-    this.basePath = basePath || path.join(process.cwd(), 'agentin', 'research');
+    this.basePath = basePath || buildRuntimePaths().researchBasePath;
     this.runsPath = path.join(this.basePath, 'runs');
     this.pendingRuns = new Map();
   }

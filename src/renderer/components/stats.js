@@ -21,23 +21,15 @@ class StatsTracker {
     }
 
     init() {
-        // Track messages
-        const originalSendMessage = window.mainPanel?.sendMessage;
-        if (originalSendMessage) {
-            window.mainPanel.sendMessage = async function() {
+        window.localAgentRendererShell?.registerPanelMethodWrapper('sendMessage', 'stats', (originalSendMessage) => async function wrappedSendMessage() {
                 window.statsTracker.trackMessage();
                 return originalSendMessage.apply(this, arguments);
-            };
-        }
+        });
 
-        // Track new chats
-        const originalNewChat = window.mainPanel?.newChat;
-        if (originalNewChat) {
-            window.mainPanel.newChat = async function() {
+        window.localAgentRendererShell?.registerPanelMethodWrapper('newChat', 'stats', (originalNewChat) => async function wrappedNewChat() {
                 window.statsTracker.trackNewSession();
                 return originalNewChat.apply(this, arguments);
-            };
-        }
+        });
 
         this.stats.lastUsed = new Date().toISOString();
         this.saveStats();

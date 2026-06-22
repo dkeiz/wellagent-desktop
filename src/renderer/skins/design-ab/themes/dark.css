@@ -1,1 +1,20 @@
-html[data-active-skin=\"design-ab\"][data-theme=\"dark\"] { --skin-theme-id: dark; }
+html[data-active-skin="design-ab"][data-theme="dark"] {
+  --skin-theme-id: dark;
+  --main-bg: #121a26;
+  --sidebar-bg: #192335;
+  --chat-bg: #152031;
+  --card-bg: #1b283c;
+  --bg-secondary: #203046;
+  --bg-tertiary: #273952;
+  --text-primary: #e6f0ff;
+  --text-secondary: #bed0e8;
+  --text-muted: #91a8c5;
+  --text-color: #e6f0ff;
+  --border-color: #3c5373;
+  --hover-bg: #2a3c56;
+  --active-bg: #324864;
+  --primary-color: #35b89d;
+  --user-msg-bg: #35b89d;
+  --user-msg-text: #ffffff;
+  --input-bg: #182435;
+}

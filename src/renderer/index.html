@@ -10,6 +10,8 @@
             try {
                 const savedTheme = localStorage.getItem('theme') || 'light';
                 const savedTypeSize = Number.parseInt(localStorage.getItem('uiTypeSize') || '', 10);
+                const defaultTypeFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+                const savedTypeFamily = String(localStorage.getItem('uiTypeFamily') || defaultTypeFamily).replace(/[;\r\n]/g, ' ').trim() || defaultTypeFamily;
                 const resolvedTypeSize = Number.isFinite(savedTypeSize) ? Math.min(18, Math.max(11, savedTypeSize)) : 13;
                 const resolvedTypeScale = resolvedTypeSize / 13;
                 document.documentElement.setAttribute('data-theme', savedTheme);
@@ -18,6 +20,7 @@
                 document.documentElement.setAttribute('data-skin-theme-token', savedTheme);
                 document.documentElement.style.setProperty('--type-base', `${resolvedTypeSize}px`);
                 document.documentElement.style.setProperty('--type-scale', `${resolvedTypeScale}`);
+                document.documentElement.style.setProperty('--ui-type-family', savedTypeFamily);
             } catch (error) {
                 document.documentElement.setAttribute('data-theme', 'light');
                 document.documentElement.setAttribute('data-active-skin', 'default');
@@ -25,49 +28,71 @@
                 document.documentElement.setAttribute('data-skin-theme-token', 'light');
                 document.documentElement.style.setProperty('--type-base', '13px');
                 document.documentElement.style.setProperty('--type-scale', '1');
+                document.documentElement.style.setProperty('--ui-type-family', '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif');
             }
         })();
     </script>
-    <link rel="stylesheet" href="styles/layout.css?v=20">
-    <link rel="stylesheet" href="styles/theme.css?v=8">
+    <link rel="stylesheet" href="styles/layout.css?v=25">
+    <link rel="stylesheet" href="styles/theme.css?v=17">
+    <link rel="stylesheet" href="styles/api-tab-compact.css?v=1">
     <link rel="stylesheet" href="styles/buttons.css?v=7">
+    <link rel="stylesheet" href="styles/settings-compact.css?v=1">
     <link rel="stylesheet" href="styles/api-provider-settings.css?v=2">
     <link rel="stylesheet" href="styles/rule-manager.css?v=7">
-    <link rel="stylesheet" href="styles/capability-panel.css?v=3">
+    <link rel="stylesheet" href="styles/capability-panel.css?v=7">
     <link rel="stylesheet" href="styles/chat-tabs.css?v=2">
     <link rel="stylesheet" href="styles/commands.css?v=2">
     <link rel="stylesheet" href="styles/skin-manager.css?v=1">
-    <link rel="stylesheet" href="styles/plugins.css?v=2">
+    <link rel="stylesheet" href="styles/plugins.css?v=5">
     <link rel="stylesheet" href="styles/plugin-studio-panel.css?v=5">
+    <link rel="stylesheet" href="styles/index-refactor.css?v=1">
+    <link rel="stylesheet" href="styles/workspace-indicator.css?v=4">
+    <script src="components/qr-code-renderer.js"></script>
 </head>
 
 <body>
     <div class="app-container">
         <!-- Left Column - Navigation -->
         <nav class="sidebar" id="left-sidebar">
-            <button class="panel-toggle-btn left-toggle" id="toggle-left-sidebar" title="Toggle Sidebar">◀</button>
+            <button class="panel-toggle-btn left-toggle" id="toggle-left-sidebar" title="Toggle Sidebar" aria-expanded="true">
+                <svg class="arrow-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <polyline points="15 18 9 12 15 6"></polyline>
+                </svg>
+            </button>
             <div class="logo">LocalAgent</div>
             <!-- Collapsible Navigation Tabs Section -->
             <div class="collapsible-section" data-section="nav-tabs">
                 <div class="section-header">
                     <span>Navigation</span>
-                    <span class="toggle-icon">▶</span>
+                    <svg class="toggle-icon arrow-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
                 </div>
                 <div class="section-content">
                     <div class="nav-tabs">
-                        <button class="nav-btn active" data-tab="chat">
+                        <button class="nav-btn sidebar-row active" data-tab="chat">
                             <span class="icon">💬</span>
                             <span class="label">Chat</span>
                         </button>
+                        <div class="agent-picker-widget sidebar-agent-block">
+                            <div class="agent-picker-header sidebar-row" id="toggle-superagents-widget" title="Open Superagent Manager">
+                                <span class="agent-header-label">
+                                    <span class="icon">👥</span>
+                                    <span class="label">Agents</span>
+                                </span>
+                                <span class="collapse-arrow" title="Collapse Agents">
+                                    <svg class="arrow-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                        <polyline points="6 9 12 15 18 9"></polyline>
+                                    </svg>
+                                </span>
+                            </div>
+                            <div class="sidebar-agent-body">
+                                <div id="agent-list" class="agent-list"></div>
+                                <button id="add-agent-btn" class="compact-btn" title="Configure Agents">+ Agent</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </div>
-            <div class="agent-picker-widget">
-                <div class="agent-picker-header" id="toggle-superagents-widget" title="Open Superagent Manager">
-                    <h3>Agents</h3>
-                </div>
-                <div id="agent-list" class="agent-list"></div>
-                <button id="add-agent-btn" class="compact-btn" title="Configure Agents">+ Agent</button>
             </div>
             <!-- Capability Panel - Nested Toggle System -->
             <div class="capability-panel" id="capability-panel">
@@ -91,7 +116,7 @@
                         <span class="group-name">Unsafe</span>
                     </div>
                     <div class="capability-group-pad active" data-group="web"
-                        title="Web: search_web_bing, fetch_url">
+                        title="Web: search_web_bing, fetch_url, inner_browser">
                         <span class="group-icon">🌐</span>
                         <span class="group-name">Web</span>
                     </div>
@@ -105,10 +130,15 @@
                             <span class="mode-dot"></span>
                         </div>
                     </div>
-                    <div class="capability-group-pad" data-group="terminal"
+                    <div class="capability-group-pad" data-group="terminal" data-mode="workspace"
                         title="Terminal: run_command">
                         <span class="group-icon">💻</span>
                         <span class="group-name">Terminal</span>
+                        <div class="mode-indicator">
+                            <span class="mode-dot"></span>
+                            <span class="mode-dot"></span>
+                            <span class="mode-dot"></span>
+                        </div>
                     </div>
                     <div class="capability-group-pad" data-group="ports"
                         title="Port Listeners: HTTP/WebSocket triggers">
@@ -131,7 +161,9 @@
             <div class="collapsible-section" data-section="chat-history">
                 <div class="section-header">
                     <span>Recent Chats</span>
-                    <span class="toggle-icon">▶</span>
+                    <svg class="toggle-icon arrow-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
                 </div>
                 <div class="section-content">
                     <div class="chat-history-sidebar">
@@ -209,45 +241,264 @@
 
             <section id="settings-tab" class="tab-content">
                 <h2>Application Settings</h2>
-                <div class="settings-group">
-                    <label>
-                        <input type="checkbox" id="auto-start"> Auto-start on login
+                <div class="settings-group settings-compact-section">
+                    <div class="settings-group-title">App</div>
+                    <label class="settings-line settings-line-toggle" title="Launch LocalAgent automatically when you sign in.">
+                        <span class="settings-line-copy">
+                            <span class="settings-line-title">Auto-start on login</span>
+                        </span>
+                        <input type="checkbox" id="auto-start">
                     </label>
-                    <label>
-                        <input type="checkbox" id="minimize-to-tray"> Minimize to system tray
+                    <label class="settings-line settings-line-toggle" title="Keep the app in the tray instead of closing to the taskbar.">
+                        <span class="settings-line-copy">
+                            <span class="settings-line-title">Minimize to system tray</span>
+                        </span>
+                        <input type="checkbox" id="minimize-to-tray">
                     </label>
-                    <div class="type-size-setting">
-                        <div class="slider-labels">
-                            <label for="type-size-slider">Type Size</label>
-                            <span id="type-size-display">13px</span>
+                    <label class="settings-line settings-line-toggle" title="Show tool execution details inline in chat.">
+                        <span class="settings-line-copy">
+                            <span class="settings-line-title">Show tool calls in chat</span>
+                        </span>
+                        <input type="checkbox" id="show-tool-calls">
+                    </label>
+                    <label class="settings-line settings-line-toggle settings-line-a2a" title="Expose the local agent-card endpoint for agent-to-agent discovery.">
+                        <span class="settings-line-copy">
+                            <span class="settings-line-title">Expose for A2A</span>
+                        </span>
+                        <span id="a2a-status-chip" class="settings-value-chip" data-state="muted">Off</span>
+                        <span id="a2a-status-tip" class="settings-tip-icon" title="" aria-label="A2A status" hidden>ⓘ</span>
+                        <input type="checkbox" id="a2a-expose-enabled">
+                    </label>
+                </div>
+
+                <div class="settings-group settings-compact-section skin-settings-section">
+                    <div class="settings-group-title">Appearance</div>
+                    <div class="settings-line settings-line-theme" title="Global app theme.">
+                        <div class="settings-line-copy">
+                            <span class="settings-line-title">Theme</span>
+                        </div>
+                        <div class="theme-picker" id="theme-picker">
+                            <button class="theme-btn active" data-theme="light" title="Light Theme">
+                                <span class="theme-icon">☀️</span>
+                                <span class="theme-label">Light</span>
+                            </button>
+                            <button class="theme-btn" data-theme="solar" title="Solar Theme">
+                                <span class="theme-icon">🌅</span>
+                                <span class="theme-label">Solar</span>
+                            </button>
+                            <button class="theme-btn" data-theme="dark" title="Dark Theme">
+                                <span class="theme-icon">🌙</span>
+                                <span class="theme-label">Dark</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="settings-line settings-line-skin" title="Runtime skin with floating descriptions on hover.">
+                        <div class="settings-line-copy">
+                            <span class="settings-line-title">Skin</span>
+                        </div>
+                        <label class="settings-inline-toggle skin-inline-toggle">
+                            <input type="checkbox" id="skin-feature-enabled">
+                            <span>Enable</span>
+                        </label>
+                        <span id="skin-active-chip" class="settings-value-chip">Default</span>
+                        <div id="skin-theme-options" class="skin-theme-options settings-skin-themes"></div>
+                        <button id="skin-manage-toggle-btn" class="secondary-btn compact-btn" type="button">Manage</button>
+                    </div>
+                    <div id="skin-manage-panel" class="settings-inline-panel skin-manage-panel" hidden>
+                        <div id="skin-picker-status" class="skin-picker-status"></div>
+                        <div class="skin-action-row">
+                            <button id="skin-add-btn" class="secondary-btn compact">Add Skin</button>
+                            <button id="skin-remove-btn" class="danger-btn compact">Remove</button>
+                            <button id="run-skin-diagnostics-btn" class="secondary-btn compact">Diagnostics</button>
+                            <button id="run-skin-autotest-btn" class="secondary-btn compact" hidden>Auto Test</button>
+                        </div>
+                        <div id="skin-picker" class="skin-picker"></div>
+                        <pre id="skin-diagnostics-output" class="skin-diagnostics-output"></pre>
+                    </div>
+                    <div class="settings-line settings-line-slider" title="Base UI text size.">
+                        <div class="settings-line-copy">
+                            <span class="settings-line-title">Type size</span>
                         </div>
                         <input type="range" id="type-size-slider" min="11" max="18" step="1" value="13">
+                        <span id="type-size-display" class="settings-subtle-value">13px</span>
                     </div>
-                </div>
-
-                <div class="settings-group privacy-section">
-                    <h3>🔒 Privacy</h3>
-                    <button id="delete-all-conversations-btn" class="danger-btn">
-                        🗑️ Delete All Conversations
-                    </button>
-                </div>
-
-                <div class="settings-group skin-settings-section">
-                    <h3>🎨 Visual Skins (Experimental)</h3>
-                    <label class="skin-feature-toggle">
-                        <input type="checkbox" id="skin-feature-enabled">
-                        Enable skin system
+                    <div class="settings-line" title="Swap the UI typeface preset.">
+                        <div class="settings-line-copy">
+                            <span class="settings-line-title">Typeface</span>
+                        </div>
+                        <select id="type-picker"></select>
+                    </div>
+                    <div class="settings-line" title="Choose the main application layout.">
+                        <div class="settings-line-copy">
+                            <span class="settings-line-title">Layout mode</span>
+                        </div>
+                        <select id="layout-mode">
+                            <option value="desktop">Desktop Split</option>
+                            <option value="classic">Classic (3-column)</option>
+                        </select>
+                    </div>
+                    <label class="settings-line settings-line-toggle" title="Prefer smaller capability pads in the left sidebar.">
+                        <span class="settings-line-copy">
+                            <span class="settings-line-title">Compact tools</span>
+                        </span>
+                        <input type="checkbox" id="settings-tools-compact">
                     </label>
-                    <div id="skin-picker-status" class="skin-picker-status"></div>
-                    <div class="skin-action-row">
-                        <button id="skin-add-btn" class="secondary-btn compact">Add New</button>
-                        <button id="skin-remove-btn" class="danger-btn compact">Remove Skin</button>
+                </div>
+
+                <div class="settings-group settings-compact-section">
+                    <div class="settings-group-title">Workspace</div>
+                    <label class="settings-line settings-line-toggle" title="Show the todo badge inside the workspace chip when active todos exist.">
+                        <span class="settings-line-copy">
+                            <span class="settings-line-title">Workspace todo badge</span>
+                        </span>
+                        <input type="checkbox" id="workspace-todo-badge">
+                    </label>
+                    <div class="settings-line" title="Choose whether opened content reuses one tab or keeps multiple tabs open.">
+                        <div class="settings-line-copy">
+                            <span class="settings-line-title">Opened content mode</span>
+                        </div>
+                        <select id="settings-opened-content-mode">
+                            <option value="single">Single tab</option>
+                            <option value="multi">Multi tab</option>
+                        </select>
                     </div>
-                    <div id="skin-picker" class="skin-picker"></div>
-                    <div id="skin-theme-options" class="skin-theme-options"></div>
-                    <button id="run-skin-autotest-btn" class="secondary-btn" hidden>Run Auto Skin Test</button>
-                    <button id="run-skin-diagnostics-btn" class="secondary-btn">Run Skin Diagnostics</button>
-                    <pre id="skin-diagnostics-output" class="skin-diagnostics-output"></pre>
+                </div>
+
+                <div class="settings-group companion-settings-section settings-compact-section">
+                    <div class="settings-group-title">Companion</div>
+                    <label class="settings-line settings-line-toggle" title="Restore companion access automatically on the next app launch.">
+                        <span class="settings-line-copy">
+                            <span class="settings-line-title">Companion startup</span>
+                        </span>
+                        <input type="checkbox" id="companion-startup">
+                    </label>
+
+                    <div class="settings-line settings-line-companion">
+                        <div class="settings-line-copy">
+                            <span class="settings-line-title">Access</span>
+                        </div>
+                        <label class="settings-inline-toggle companion-inline-toggle">
+                            <input type="checkbox" id="companion-enabled">
+                            <span>Enable</span>
+                        </label>
+                        <strong id="companion-status-text" class="companion-status-inline">Disabled</strong>
+                        <span id="companion-device-count" class="companion-mini-pill">0 paired</span>
+                        <span id="companion-connected-count" class="companion-mini-pill">0 connected</span>
+                        <span id="companion-warning" class="companion-inline-warning" hidden></span>
+                        <button id="companion-copy-link-btn" class="secondary-btn compact-btn">Copy Link</button>
+                        <button id="companion-toggle-advanced-btn" class="secondary-btn compact-btn">Advanced</button>
+                    </div>
+
+                    <div class="settings-line settings-line-companion-pairing">
+                        <div class="settings-line-copy">
+                            <span class="settings-line-title">Pairing</span>
+                        </div>
+                        <strong id="companion-pairing-code" class="settings-code-chip">—</strong>
+                        <small id="companion-pairing-expiry" class="settings-subtle-value">No active code</small>
+                        <button id="companion-generate-pairing-btn" class="primary-btn compact-btn">Generate</button>
+                        <button id="companion-cancel-pairing-btn" class="secondary-btn" hidden>Cancel Pairing</button>
+                        <button id="companion-show-app-qr-btn" class="secondary-btn compact-btn" hidden>Show App QR</button>
+                        <button id="companion-show-web-qr-btn" class="secondary-btn compact-btn" hidden>Show Web QR</button>
+                        <button id="companion-show-download-qr-btn" class="secondary-btn compact-btn" hidden>Show APK QR</button>
+                        <button id="companion-copy-pairing-link-btn" class="secondary-btn compact-btn">Copy Pairing Link</button>
+                    </div>
+
+                    <div id="companion-advanced-panel" class="companion-advanced-panel" hidden>
+                        <div class="companion-compact-row companion-row-network">
+                            <label class="companion-inline-field companion-inline-field-sm">
+                                <span>Host</span>
+                                <input type="text" id="companion-host" placeholder="0.0.0.0">
+                            </label>
+                            <label class="companion-inline-field companion-inline-field-xs">
+                                <span>Port</span>
+                                <input type="number" id="companion-port" min="1" max="65535" placeholder="8790">
+                            </label>
+                            <button id="companion-save-btn" class="secondary-btn">Apply Network Settings</button>
+                            <button id="companion-refresh-btn" class="secondary-btn compact-btn">Refresh</button>
+                        </div>
+
+                        <div class="companion-compact-row companion-row-network">
+                            <label class="settings-inline-toggle companion-inline-toggle">
+                                <input type="checkbox" id="companion-android-https-enabled">
+                                <span>Android browser HTTPS</span>
+                            </label>
+                            <span id="companion-android-https-status" class="companion-mini-pill">Off</span>
+                            <button id="companion-android-https-setup-btn" class="secondary-btn compact-btn">Setup HTTPS</button>
+                        </div>
+                        <div id="companion-android-https-note" class="settings-help-text"></div>
+
+                        <div class="companion-remote-gateway-section">
+                            <div class="remote-gateway-main-row">
+                                <h4>Remote Gateway</h4>
+                                <span id="remote-gateway-status-text" class="settings-help-text">Disconnected</span>
+                                <button id="remote-gateway-setup-btn" class="primary-btn compact-btn">Set Up Remote Gateway</button>
+                                <button id="remote-gateway-manual-toggle-btn" class="secondary-btn compact-btn">Manual</button>
+                            </div>
+                            <div id="remote-gateway-manual-panel" class="remote-gateway-manual-panel" hidden>
+                                <div class="companion-compact-row companion-row-network">
+                                    <label class="companion-inline-field">
+                                        <span>Gateway URL</span>
+                                        <input type="text" id="remote-gateway-url" placeholder="wss://your-server.com/gateway/host">
+                                    </label>
+                                    <label class="companion-inline-field">
+                                        <span>Auth Secret</span>
+                                        <input type="password" id="remote-gateway-secret" placeholder="Shared secret">
+                                    </label>
+                                </div>
+                                <div class="companion-compact-row">
+                                    <button id="remote-gateway-connect-btn" class="primary-btn compact-btn">Connect</button>
+                                    <button id="remote-gateway-disconnect-btn" class="secondary-btn compact-btn">Disconnect</button>
+                                    <button id="remote-gateway-secret-btn" class="secondary-btn compact-btn">Generate Secret</button>
+                                    <button id="remote-gateway-deploy-btn" class="secondary-btn compact-btn">Show Package Path</button>
+                                    <button id="remote-gateway-agent-setup-btn" class="secondary-btn compact-btn">Agent Setup</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="companion-devices-panel" class="companion-devices-section">
+                            <div class="settings-section-header companion-devices-header">
+                                <div>
+                                    <h4>Paired Devices</h4>
+                                </div>
+                            </div>
+                            <div id="companion-devices-empty" class="settings-help-text">No paired devices yet.</div>
+                            <div id="companion-devices-list" class="companion-devices-list"></div>
+                        </div>
+                    </div>
+
+                    <input type="hidden" id="companion-browser-url">
+                    <input type="hidden" id="companion-pairing-url">
+                    <input type="hidden" id="companion-native-app-url">
+                </div>
+
+                <div class="settings-group privacy-section settings-compact-section">
+                    <div class="settings-group-title">Privacy</div>
+                    <div class="settings-line" title="Choose whether the New Chat action starts in normal or private mode by default.">
+                        <div class="settings-line-copy">
+                            <span class="settings-line-title">Default private chat behavior</span>
+                        </div>
+                        <select id="default-private-chat-behavior">
+                            <option value="normal">Normal chat</option>
+                            <option value="private">Private chat</option>
+                        </select>
+                    </div>
+                    <label class="settings-line settings-line-toggle" title="Skip confirmation when closing a private chat.">
+                        <span class="settings-line-copy">
+                            <span class="settings-line-title">Close private chat with no confirmation</span>
+                        </span>
+                        <input type="checkbox" id="private-close-no-confirm">
+                    </label>
+                    <details class="settings-drawer settings-danger-drawer">
+                        <summary class="settings-line settings-line-summary" title="Permanent actions.">
+                            <span class="settings-line-copy">
+                                <span class="settings-line-title">Danger zone</span>
+                            </span>
+                            <span class="settings-subtle-value">Delete history</span>
+                        </summary>
+                        <div class="settings-inline-panel settings-danger-panel">
+                            <button id="delete-all-conversations-btn" class="danger-btn">🗑️ Delete All Conversations</button>
+                        </div>
+                    </details>
                 </div>
             </section>
 
@@ -264,11 +515,65 @@
                 </div>
             </div>
 
+            <div id="remote-gateway-setup-modal" class="modal-overlay hidden">
+                <div class="modal-content remote-gateway-setup-modal">
+                    <h3>Set Up Remote Gateway</h3>
+                    <div class="remote-gateway-form">
+                        <label>
+                            <span>VPS Host</span>
+                            <input type="text" id="remote-setup-host" placeholder="203.0.113.10">
+                        </label>
+                        <label>
+                            <span>SSH User</span>
+                            <input type="text" id="remote-setup-user" value="root">
+                        </label>
+                        <label>
+                            <span>SSH Port</span>
+                            <input type="number" id="remote-setup-ssh-port" min="1" max="65535" value="22">
+                        </label>
+                        <label>
+                            <span>Gateway Port</span>
+                            <input type="number" id="remote-setup-gateway-port" min="1" max="65535" value="8791">
+                        </label>
+                        <label>
+                            <span>Domain</span>
+                            <input type="text" id="remote-setup-domain" placeholder="remote.example.com">
+                        </label>
+                        <label>
+                            <span>Install Path</span>
+                            <input type="text" id="remote-setup-target-dir" value="~/localagent-remote-gateway">
+                        </label>
+                    </div>
+                    <label class="settings-inline-toggle remote-gateway-tls-toggle">
+                        <input type="checkbox" id="remote-setup-use-tls" checked>
+                        <span>Use HTTPS/WSS through reverse proxy when a domain is set</span>
+                    </label>
+                    <pre id="remote-gateway-setup-output" class="remote-gateway-setup-output"></pre>
+                    <div class="modal-actions">
+                        <button id="remote-setup-cancel-btn" class="secondary-btn">Cancel</button>
+                        <button id="remote-setup-run-btn" class="primary-btn">Run Setup</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="companion-qr-modal" class="modal-overlay hidden">
+                <div class="modal-content companion-qr-modal">
+                    <h3 id="companion-qr-title">Companion QR</h3>
+                    <div id="companion-qr-svg" class="companion-qr-svg" aria-live="polite"></div>
+                    <textarea id="companion-qr-payload" class="companion-qr-payload" readonly></textarea>
+                    <div class="modal-actions">
+                        <button id="companion-qr-copy-btn" class="secondary-btn">Copy Link</button>
+                        <button id="companion-qr-close-btn" class="primary-btn">Close</button>
+                    </div>
+                </div>
+            </div>
+
             <section id="mcp-tab" class="tab-content">
                 <h2>MCP Tools</h2>
+                <p>Shows only tools visible to the current chat or agent. Agent permissions can opt into more registered tools.</p>
 
                 <div class="tool-tester">
-                    <h3>Test Tool</h3>
+                    <h3>Test Visible Tool</h3>
                     <div class="tool-input-row">
                         <select id="tool-select" class="form-control">
                             <option value="">Select a tool...</option>
@@ -280,7 +585,7 @@
                 </div>
 
                 <div class="mcp-tools-list">
-                    <h3>Available Tools (${tools.length})</h3>
+                    <h3>Visible Tools</h3>
                     <div class="tools-scroll-container">
                         <div id="mcp-tools-container">
                             <!-- MCP tools will be dynamically listed here -->
@@ -340,7 +645,11 @@
                         <span>📋 Saved</span>
                         <div class="panel-header-btns">
                             <button class="compact-btn" id="compact-workflows-btn" title="Compact view">▤</button>
-                            <button class="toggle-btn" id="collapse-workflows-btn" title="Collapse">▲</button>
+                            <button class="toggle-btn arrow-toggle-btn" id="collapse-workflows-btn" title="Collapse" aria-expanded="true">
+                                <svg class="arrow-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </button>
                         </div>
                     </div>
                     <div class="panel-content">
@@ -350,27 +659,46 @@
             </section>
 
 
-            <section id="llm-tab" class="tab-content" style="padding: 0.25rem;">
-                <h2 style="margin: 0 0 0.25rem 0; font-size: 1.2rem;">LLM Configuration</h2>
-                <div class="llm-settings" style="display: flex; flex-direction: column; gap: 0.25rem;">
-                    <div class="system-prompt-container" style="margin: 0;">
-                        <h3 style="margin: 0 0 0.1rem 0; font-size: 1rem;">System Prompt</h3>
+            <section id="llm-tab" class="tab-content llm-tab-compact">
+                <h2 class="llm-tab-title">LLM Configuration</h2>
+                <div class="llm-settings llm-settings-stack">
+                    <div class="agent-behavior-container" id="agent-behavior-container">
+                        <h3 class="llm-section-title">Agent Behavior</h3>
+                        <div class="agent-behavior-options">
+                            <label class="agent-behavior-option" data-behavior-option="single">
+                                <input type="radio" name="agent-behavior-mode" value="single">
+                                <span class="agent-behavior-title">Single agent behavior</span>
+                                <textarea id="agent-behavior-single" rows="3"></textarea>
+                            </label>
+                            <label class="agent-behavior-option" data-behavior-option="multi">
+                                <input type="radio" name="agent-behavior-mode" value="multi">
+                                <span class="agent-behavior-title">Multiagent behavior</span>
+                                <textarea id="agent-behavior-multi" rows="3"></textarea>
+                            </label>
+                            <label class="agent-behavior-option" data-behavior-option="minimal">
+                                <input type="radio" name="agent-behavior-mode" value="minimal">
+                                <span class="agent-behavior-title">Minimal behavior</span>
+                                <textarea id="agent-behavior-minimal" rows="3"></textarea>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="system-prompt-container layout-reset-margin">
+                        <h3 class="llm-section-title">System Prompt</h3>
                         <textarea id="system-prompt" placeholder="Enter system prompt..." rows="12"
-                            style="margin: 0 0 0.1rem 0; width: 100%; min-height: 20rem;"></textarea>
-                        <button id="save-prompt-btn" class="primary-btn" style="margin: 0;">Save System Prompt</button>
+                            class="system-prompt-textarea"></textarea>
+                        <button id="save-prompt-btn" class="primary-btn layout-reset-margin">Save System Prompt</button>
                     </div>
 
-                    <div class="custom-rules-container" style="margin: 0;">
-                        <h3 style="margin: 0 0 0.25rem 0; font-size: 1rem;">Custom Rules</h3>
-                        <div id="prompt-rules-list" class="prompt-rules-container scrollable"
-                            style="margin: 0 0 0.25rem 0;">
+                    <div class="custom-rules-container layout-reset-margin">
+                        <h3 class="llm-subsection-title">Custom Rules</h3>
+                        <div id="prompt-rules-list" class="prompt-rules-container scrollable prompt-rules-list-spacing">
                             <!-- Rules will be dynamically added here -->
                         </div>
                         <div id="rules-action-row" class="rules-action-row">
-                            <button id="add-rule-btn" class="secondary-btn" style="margin: 0;">+ Add Rule</button>
-                            <button id="export-rules-btn" class="secondary-btn" style="margin: 0;">Export Rules</button>
-                            <button id="import-rules-btn" class="secondary-btn" style="margin: 0;">Import Rules</button>
-                            <input type="file" id="import-rules-file" accept=".json" style="display: none;">
+                            <button id="add-rule-btn" class="secondary-btn layout-reset-margin">+ Add Rule</button>
+                            <button id="export-rules-btn" class="secondary-btn layout-reset-margin">Export Rules</button>
+                            <button id="import-rules-btn" class="secondary-btn layout-reset-margin">Import Rules</button>
+                            <input type="file" id="import-rules-file" class="initially-hidden" accept=".json">
                         </div>
                     </div>
                 </div>
@@ -398,11 +726,13 @@
                             <select id="llm-model-select"></select>
                             <button id="refresh-provider-models-btn" type="button" class="secondary-btn">Discover
                                 Models</button>
+                            <button id="test-selected-model-btn" type="button" class="secondary-btn initially-hidden">Test Model</button>
                         </div>
+                        <div id="selected-model-status" class="config-help api-status-text"></div>
                         <div id="provider-discovery-status" class="config-help api-status-text"></div>
 
                         <!-- Custom model input (shown for Ollama) -->
-                        <div id="custom-model-section" class="api-subsection" style="display: none;">
+                        <div id="custom-model-section" class="api-subsection initially-hidden">
                             <label for="custom-model-input">Custom Model (e.g. deepseek-v3.2:cloud)</label>
                             <div class="api-inline-action-row">
                                 <input type="text" id="custom-model-input" placeholder="Type model name...">
@@ -422,7 +752,7 @@
                             <input type="checkbox" id="global-concurrency-enabled">
                         </label>
 
-                        <div id="context-window-section" class="api-subsection context-window-section" style="display: none;">
+                        <div id="context-window-section" class="api-subsection context-window-section initially-hidden">
                             <div id="context-window-configurable" class="slider-control context-window-control">
                                 <div class="slider-labels">
                                     <label for="context-slider" id="context-display-label">Context Size</label>
@@ -431,9 +761,7 @@
                                         <input id="context-custom-input" type="text" inputmode="numeric" placeholder="custom tokens">
                                     </div>
                                 </div>
-                                <input type="range" id="context-slider" min="0" max="9" step="1" value="1"
-                                    oninput="window.mainPanel && window.mainPanel.updateContextDisplay(this.value)"
-                                    onchange="window.mainPanel && window.mainPanel.saveContextSize(this.value)">
+                                <input type="range" id="context-slider" min="0" max="9" step="1" value="1">
                                 <div class="context-scale" aria-hidden="true">
                                     <span>4k</span>
                                     <span>8k</span>
@@ -447,52 +775,64 @@
                                     <span>256k</span>
                                 </div>
                             </div>
-                            <div id="context-window-readonly" class="api-context-readonly" style="display: none;"></div>
+                            <div id="context-window-readonly" class="api-context-readonly initially-hidden"></div>
                         </div>
                     </div>
 
-                    <div id="llm-model-settings-section" class="provider-config" style="display: none;">
+                    <div id="llm-model-settings-section" class="provider-config initially-hidden">
                         <h3>Model Settings</h3>
-                        <div id="llm-model-capabilities"
-                            style="margin-bottom: 10px; color: #666; font-size: 0.85rem; line-height: 1.4;"></div>
+                        <div id="llm-model-capabilities" class="api-model-capabilities-note"></div>
                         <div id="llm-model-config-container"></div>
                     </div>
 
                     <button id="llm-config-save-button" class="primary-btn">Save Configuration</button>
 
                     <!-- Current configuration display -->
-                    <div id="current-config-display" class="api-current-config" style="display: none;">
+                    <div id="current-config-display" class="api-current-config initially-hidden">
                         <strong>Current:</strong> <span id="current-config-text"></span>
                     </div>
                 </div>
             </section>
+
+            <!-- Split handle and content viewer for desktop split layout -->
+            <div class="split-handle" id="split-handle" title="Drag to resize"></div>
+            <div class="content-viewer-panel" id="content-viewer-panel">
+                <div class="content-viewer-header">
+                    <div class="content-viewer-tabs" id="content-viewer-tabs"></div>
+                    <div class="content-viewer-controls">
+                        <select id="content-viewer-mode" class="compact-select">
+                            <option value="single">Single Tab</option>
+                            <option value="multi">Multi-Tab</option>
+                        </select>
+                        <button id="content-viewer-chat-toggle" class="icon-btn-sm" title="Open Chat Here">💬</button>
+                    </div>
+                </div>
+                <div class="content-viewer-body" id="content-viewer-body">
+                    <div class="content-viewer-empty">
+                        <span>No content open</span>
+                        <small>Click links in chat or agents will send content here</small>
+                    </div>
+                </div>
+            </div>
         </main>
 
         <!-- Right Column - Widgets -->
         <aside class="widget-panel" id="right-panel">
-            <button class="panel-toggle-btn right-toggle" id="toggle-right-panel" title="Toggle Widgets">▶</button>
-
-            <!-- Theme Picker -->
-            <div class="theme-picker" id="theme-picker">
-                <button class="theme-btn active" data-theme="light" title="Light Theme">
-                    <span class="theme-icon">☀️</span>
-                    <span class="theme-label">Light</span>
-                </button>
-                <button class="theme-btn" data-theme="solar" title="Solar Theme">
-                    <span class="theme-icon">🌅</span>
-                    <span class="theme-label">Solar</span>
-                </button>
-                <button class="theme-btn" data-theme="dark" title="Dark Theme">
-                    <span class="theme-icon">🌙</span>
-                    <span class="theme-label">Dark</span>
-                </button>
-            </div>
+            <button class="panel-toggle-btn right-toggle" id="toggle-right-panel" title="Toggle Widgets" aria-expanded="true">
+                <svg class="arrow-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <polyline points="9 18 15 12 9 6"></polyline>
+                </svg>
+            </button>
 
             <div class="widget-stack" id="widget-stack">
                 <div class="plugins-widget collapsible-widget">
                     <div class="widget-header" id="toggle-plugins-widget">
                         <span class="plugins-header-label">🧩 Plugins</span>
-                        <span class="collapse-arrow">▼</span>
+                        <span class="collapse-arrow">
+                            <svg class="arrow-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </span>
                     </div>
                     <div class="widget-content" id="plugins-widget-content">
                         <div id="plugins-list" class="plugins-list"></div>
@@ -501,7 +841,12 @@
 
                 <div class="subagents-widget collapsible-widget subagent-picker-widget">
                     <div class="widget-header" id="toggle-subagents-widget">
-                        <span>Sub-agents</span>
+                        <span class="subagent-header-label">👥 Sub-agents</span>
+                        <span class="collapse-arrow">
+                            <svg class="arrow-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </span>
                     </div>
                     <div class="widget-content" id="subagents-widget-content">
                         <div id="subagent-list" class="agent-list"></div>
@@ -511,13 +856,20 @@
                 <div class="workflows-widget collapsible-widget">
                     <div class="widget-header" id="toggle-workflows-widget">
                         <span class="workflow-header-label">⚡ Workflows</span>
-                        <span class="collapse-arrow">▼</span>
+                        <span class="collapse-arrow">
+                            <svg class="arrow-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </span>
                     </div>
                     <div class="widget-content" id="saved-workflows-list">
                         <!-- Saved workflows will be listed here -->
                     </div>
                 </div>
             </div>
+
+            <!-- Plugin Sidebar Widgets (populated by plugins via registerSidebarWidget) -->
+            <div id="plugin-sidebar-widgets" class="plugin-sidebar-widgets"></div>
 
             <button id="calendar-dock" class="calendar-dock" aria-expanded="false" aria-controls="calendar-flyout"
                 title="Open calendar">
@@ -533,6 +885,42 @@
                 <div id="calendar-events"></div>
             </div>
         </aside>
+
+        <!-- Status Bar for desktop split layout -->
+        <footer class="status-bar" id="status-bar">
+            <div class="status-bar-left">
+                <button id="statusbar-show-shortcuts-btn" class="icon-btn" title="Keyboard Shortcuts">⌨️</button>
+                <button id="statusbar-show-stats-btn" class="icon-btn" title="Statistics">📊</button>
+                <div class="settings-dock">
+                    <button id="statusbar-settings-dock" class="icon-btn" aria-expanded="false"
+                        aria-controls="statusbar-settings-flyout" title="Open settings menu">⚙️</button>
+                    <div id="statusbar-settings-flyout" class="settings-flyout" aria-hidden="true">
+                        <div class="settings-flyout-panel">
+                            <button class="nav-btn" data-tab="settings">
+                                <span class="icon">⚙️</span>
+                                <span class="label">Settings</span>
+                            </button>
+                            <button class="nav-btn" data-tab="llm">
+                                <span class="icon">🤖</span>
+                                <span class="label">LLM Settings</span>
+                            </button>
+                            <button class="nav-btn" data-tab="api">
+                                <span class="icon">🔑</span>
+                                <span class="label">API Providers</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="status-bar-center">
+            </div>
+            <div class="status-bar-right">
+                <div id="status-bar-avatar" class="status-bar-avatar"></div>
+                <button id="status-bar-calendar" class="status-bar-calendar-btn">
+                    📅 <span id="status-bar-date">Calendar</span>
+                </button>
+            </div>
+        </footer>
     </div>
 
     <div id="plugin-studio-overlay" class="plugin-studio-overlay hidden">
@@ -551,7 +939,10 @@
                             <h3 id="plugin-studio-title">Plugin</h3>
                             <p id="plugin-studio-meta"></p>
                         </div>
-                        <button id="plugin-studio-toggle" class="compact-btn">Enable</button>
+                        <div class="plugin-studio-title-actions">
+                            <button id="plugin-studio-visibility" class="compact-btn">Show</button>
+                            <button id="plugin-studio-toggle" class="compact-btn">Enable</button>
+                        </div>
                     </div>
                     <div class="plugin-studio-actions">
                         <button id="plugin-studio-discover" class="compact-btn">Discover</button>
@@ -564,35 +955,58 @@
         </div>
     </div>
 
-    <script src="electron-api.js?v=9"></script>
+    <script src="electron-api-facade.js?v=1"></script>
+    <script src="components/renderer-shell.js?v=1"></script>
     <script src="components/mcp-tool-setup.js?v=1"></script>
+    <script src="components/sidebar-chat-sessions.js?v=1"></script>
     <script src="components/sidebar.js?v=9"></script>
     <script src="components/command-handler.js?v=1"></script>
     <script src="components/chart-renderer.js?v=1"></script>
     <script src="components/superagent-manager-tab.js?v=1"></script>
     <script src="components/research-orchestrator-ui.js?v=1"></script>
     <script src="components/main-panel-tabs.js?v=6"></script>
+    <script src="components/workspace-indicator.js?v=4"></script>
+    <script src="components/chat-privacy-mode.js?v=1"></script>
     <script src="components/main-panel-permissions.js?v=1"></script>
     <script src="components/message-formatter.js?v=9"></script>
+    <script src="components/api-provider-settings-helpers.js?v=1"></script>
     <script src="components/api-provider-settings.js?v=1"></script>
     <script src="components/artifacts-button.js?v=2"></script>
     <script src="components/tts-text-utils.js?v=1"></script>
     <script src="components/tts-controller.js?v=2"></script>
+    <script src="components/main-panel-layout.js?v=1"></script>
+    <script src="components/main-panel-messages.js?v=1"></script>
+    <script src="components/main-panel-chat-actions.js?v=1"></script>
+    <script src="components/main-panel-voice.js?v=1"></script>
+    <script src="components/main-panel-context.js?v=1"></script>
+    <script src="components/main-panel-events.js?v=1"></script>
     <script src="components/main-panel.js?v=13"></script>
+    <script src="components/main-panel-content-viewer-links.js"></script>
+    <script src="components/prompt-behavior-manager.js?v=1"></script>
+    <script src="components/tool-call-preview.js?v=1"></script>
     <script src="components/context-window-control.js?v=2"></script>
-    <script src="components/chat-continuity.js?v=1"></script>
+    <script src="components/chat-continuity.js?v=2"></script>
     <script src="components/calendar.js?v=8"></script>
-    <script src="components/agent-picker.js?v=7"></script>
+    <script src="components/agent-picker.js?v=8"></script>
     <script src="components/shortcuts.js?v=7"></script>
     <script src="components/rule-manager.js?v=7"></script>
     <script src="components/stats.js?v=7"></script>
     <script src="components/workflow-editor.js?v=1"></script>
+    <script src="components/main-panel-tab-restore.js?v=1"></script>
     <script src="components/capability-panel.js?v=2"></script>
     <script src="components/skin-manager.js?v=1"></script>
     <script src="components/plugin-panel.js?v=3"></script>
+    <script src="components/plugin-sidebar-widget.js?v=1"></script>
+    <script src="components/remote-gateway-settings.js?v=1"></script>
     <script src="components/workflow-widget.js?v=1"></script>
     <script src="components/plugin-studio-tts-panel.js?v=6"></script>
+    <script src="components/plugin-studio-telegram-panel.js?v=1"></script>
     <script src="components/plugin-studio-panel.js?v=2"></script>
+    <script src="components/split-pane.js"></script>
+    <script src="components/content-viewer-utils.js?v=1"></script>
+    <script src="components/content-viewer.js"></script>
+    <script src="components/app-layout-mode.js"></script>
+    <script src="app-companion-ui.js?v=1"></script>
     <script src="app.js?v=7"></script>
 </body>
 

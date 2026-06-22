@@ -1,0 +1,358 @@
+.workspace-status-anchor {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    align-self: center;
+    flex: 0 1 auto;
+    min-width: 0;
+    z-index: 2;
+    pointer-events: auto;
+}
+
+.workspace-status-row {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    pointer-events: auto;
+}
+
+.todo-floating-controls {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.workspace-control-shell {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex: 0 1 auto;
+    min-width: 0;
+    pointer-events: auto;
+}
+
+.workspace-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    max-width: 156px;
+    height: var(--control-h-md);
+    padding: 0 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--card-bg);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: var(--text-sm);
+    line-height: 1;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.workspace-chip:hover {
+    background: var(--hover-bg);
+    color: var(--text-primary);
+}
+
+.workspace-chip:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.workspace-chip[data-source="configured"] {
+    color: var(--text-primary);
+}
+
+.workspace-chip-icon {
+    font-size: 11px;
+    opacity: 0.8;
+    flex: 0 0 auto;
+}
+
+.workspace-chip-copy {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.workspace-chip-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-sm);
+    font-weight: 500;
+}
+
+.workspace-todo-flag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 46px;
+    height: 26px;
+    padding: 0 6px;
+    border: 1px solid color-mix(in srgb, var(--accent-color), transparent 42%);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--card-bg), var(--accent-color) 8%);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-weight: 700;
+    pointer-events: auto;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.todo-floating-flag {
+    height: 26px;
+}
+
+.workspace-todo-flag[hidden] {
+    display: none !important;
+}
+
+.todo-floating-flag[hidden] {
+    display: none !important;
+}
+
+.workspace-todo-flag:hover,
+.workspace-todo-flag[aria-expanded="true"] {
+    border-color: color-mix(in srgb, var(--accent-color), white 20%);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+    transform: translateY(-1px);
+}
+
+.workspace-todo-icon {
+    font-size: 12px;
+}
+
+.workspace-todo-progress {
+    font-size: 0.72rem;
+}
+
+.workspace-todo-dropdown {
+    position: absolute;
+    top: auto;
+    bottom: calc(100% + 6px);
+    left: 0;
+    width: min(360px, 48vw);
+    overflow: auto;
+    border: 1px solid color-mix(in srgb, var(--border-color), transparent 12%);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--card-bg), var(--bg-secondary) 8%);
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.14);
+    color: var(--text-primary);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-4px) scaleY(0.96);
+    transform-origin: top left;
+    transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.workspace-todo-dropdown.expanded {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scaleY(1);
+}
+
+.workspace-todo-header {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.workspace-todo-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.workspace-todo-header strong {
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+
+.workspace-todo-hide {
+    border: 0;
+    border-radius: 999px;
+    padding: 3px 8px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.72rem;
+}
+
+.workspace-todo-hide:hover {
+    color: var(--text-primary);
+}
+
+.workspace-todo-list {
+    display: grid;
+    gap: 2px;
+    max-height: 206px;
+    overflow-y: auto;
+    padding: 7px;
+}
+
+.workspace-todo-item {
+    display: grid;
+    grid-template-columns: 18px 1fr;
+    gap: 6px;
+    align-items: start;
+    padding: 6px 7px;
+    border-radius: 9px;
+    font-size: 0.82rem;
+}
+
+.workspace-todo-item:hover {
+    background: color-mix(in srgb, var(--bg-secondary), transparent 20%);
+}
+
+.workspace-todo-item.completed {
+    color: var(--text-secondary);
+}
+
+.workspace-todo-item.completed .workspace-todo-text {
+    text-decoration: line-through;
+}
+
+.workspace-todo-marker {
+    color: var(--accent-color);
+    font-weight: 800;
+}
+
+.workspace-todo-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.workspace-modal-shell {
+    padding: 18px;
+}
+
+.workspace-modal {
+    width: min(620px, 92vw);
+    padding: 18px;
+    border: 1px solid var(--border-color);
+    border-radius: 18px;
+    background: var(--card-bg);
+    box-shadow: 0 28px 64px rgba(0, 0, 0, 0.18);
+}
+
+.workspace-modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+}
+
+.workspace-modal-header h3 {
+    margin: 0 0 4px;
+}
+
+.workspace-modal-header p {
+    margin: 0;
+    color: var(--text-secondary);
+}
+
+.workspace-modal-close {
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 1.2rem;
+}
+
+.workspace-field {
+    display: grid;
+    gap: 6px;
+}
+
+.workspace-field span,
+.workspace-modal-meta span {
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.workspace-path-input {
+    width: 100%;
+    min-height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.workspace-modal-meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.workspace-modal-meta div {
+    display: grid;
+    gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--bg-secondary), transparent 12%);
+}
+
+.workspace-modal-meta strong {
+    overflow-wrap: anywhere;
+}
+
+.workspace-modal-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.workspace-modal-spacer {
+    flex: 1;
+}
+
+[data-layout-mode="desktop"] .status-bar-center .workspace-chip {
+    height: var(--control-h-sm);
+    max-width: 132px;
+    padding: 0 7px;
+    font-size: var(--text-xs);
+    border-radius: var(--radius-sm);
+}
+
+[data-layout-mode="desktop"] .status-bar-center .workspace-chip-name {
+    font-size: var(--text-xs);
+}
+
+[data-layout-mode="desktop"] .status-bar-center .workspace-todo-flag {
+    height: var(--control-h-sm);
+}
+
+@media (max-width: 980px) {
+    .workspace-chip {
+        max-width: 132px;
+    }
+
+    .workspace-todo-dropdown {
+        width: min(320px, 78vw);
+    }
+}

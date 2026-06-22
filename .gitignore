@@ -1,11 +1,13 @@
 # Dependencies
 node_modules/
-package-lock.json
+mobile/package-lock.json
 
 # Build outputs
 dist/
 dist_*/
 dist-*/
+dist_portable_*/
+dist_dir_*/
 build/
 out/
 
@@ -38,8 +40,39 @@ Thumbs.db
 # Temporary files
 *.tmp
 temp/
+data/tmp/
+data/whisper-cache/
+window_dump*.xml
+agentin/*window_dump*.xml
+
+# Debug capture screenshots
+agentin/localagent-*.png
+
+# ===== RUNTIME ARTIFACTS (never ship) =====
+
+# A2A protocol runtime data (task history, event logs)
+agentin/a2a/tasks/
+agentin/a2a/events/
+
+# Runtime task queue state
+agentin/tasks/
+
+# Generated sub-agent verifier folders
+agentin/agents/sub/*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*/
+
+# Python bytecode
+**/__pycache__/
+*.pyc
+*.pyo
 
 # ===== PERSONAL / PRIVATE RUNTIME DATA =====
+
+# Runtime memory files are local-only. Keep marker/docs files trackable.
+agentin/memory/**
+!agentin/memory/
+!agentin/memory/README.md
+!agentin/memory/.gitignore
+!agentin/memory/.gitkeep
 
 # User profile memory (contains personal observations, health data, location, habits)
 agentin/userabout/memoryaboutuser.md
@@ -65,6 +98,7 @@ agentin/workspaces/*/
 agentin/subtasks/runs/
 agentin/research/runs/
 agentin/workflows/runs/
+agentin/workflows/runtime_workflow_persist_*.json
 
 # Knowledge staging (user-generated, not curated)
 agentin/knowledge/staging/*/
@@ -86,6 +120,9 @@ ui-concepts/
 
 # Scratch files
 tmp.txt
+
+# Release archives kept locally outside the public source surface
+releases/android/archive/
 
 # ===== PRESERVE DIRECTORY STRUCTURE =====
 # .gitkeep files are explicitly tracked

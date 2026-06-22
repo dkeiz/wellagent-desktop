@@ -51,8 +51,19 @@ module.exports = {
     const deliveredMessages = [];
     const statusUpdates = [];
     const publishedEvents = [];
+    const settings = new Map([
+      ['agents.defaultsSeeded.v1', 'true'],
+      ['agents.defaultAdditionsSynced.v4.book-comfy-setup-search', 'true']
+    ]);
 
     const db = {
+      async getSetting(key) {
+        return settings.get(key) || null;
+      },
+      async saveSetting(key, value) {
+        settings.set(key, String(value));
+        return { key, value };
+      },
       async getAgents() {
         return [agent];
       },

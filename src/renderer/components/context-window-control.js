@@ -53,8 +53,9 @@
       return;
     }
     await window.electronAPI.setContextSetting(parsed);
-    if (window.mainPanel) {
-      window.mainPanel._selectedContextSetting = parsed;
+    const panel = window.localAgentRendererShell?.getMainPanel?.() || window.mainPanel;
+    if (panel) {
+      panel._selectedContextSetting = parsed;
     }
     state.customActive = true;
     state.customValue = parsed;
@@ -63,13 +64,11 @@
   }
 
   function installMainPanelWrappers() {
-    const panel = window.mainPanel;
-    if (!panel || panel._contextCustomWrapped) return false;
+    const shell = window.localAgentRendererShell;
+    if (!shell || shell.__contextCustomWrapped) return false;
+    shell.__contextCustomWrapped = true;
 
-    const originalApplyContextProfile = panel.applyContextProfile.bind(panel);
-    const originalUpdateContextDisplay = panel.updateContextDisplay.bind(panel);
-
-    panel.applyContextProfile = function wrappedApplyContextProfile(profile) {
+    shell.registerPanelMethodWrapper('applyContextProfile', 'context-window-control', (originalApplyContextProfile) => function wrappedApplyContextProfile(profile) {
       const result = originalApplyContextProfile(profile);
       const configurable = document.getElementById('context-window-configurable');
       if (configurable?.style.display !== 'none' && state.customActive) {
@@ -77,14 +76,12 @@
         syncDisplayFromCustom();
       }
       return result;
-    };
+    });
 
-    panel.updateContextDisplay = function wrappedUpdateContextDisplay(index) {
+    shell.registerPanelMethodWrapper('updateContextDisplay', 'context-window-control', (originalUpdateContextDisplay) => function wrappedUpdateContextDisplay(index) {
       if (state.customActive) return;
       return originalUpdateContextDisplay(index);
-    };
-
-    panel._contextCustomWrapped = true;
+    });
     return true;
   }
 

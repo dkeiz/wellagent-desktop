@@ -1,3 +1,79 @@
-html[data-active-skin=\"design-c\"] {
+html[data-active-skin="design-c"] {
   --skin-contract-id: design-c;
+  --border-radius: 6px;
+}
+
+html[data-active-skin="design-c"] body {
+  font-family: "Segoe UI", "IBM Plex Sans", "Roboto", sans-serif;
+  letter-spacing: 0.015em;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--primary-color), transparent 94%) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--primary-color), transparent 95%) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+html[data-active-skin="design-c"] .sidebar,
+html[data-active-skin="design-c"] .widget-panel,
+html[data-active-skin="design-c"] .messages-container,
+html[data-active-skin="design-c"] .calendar-widget,
+html[data-active-skin="design-c"] .agent-picker-widget,
+html[data-active-skin="design-c"] .subagents-widget,
+html[data-active-skin="design-c"] .workflows-widget,
+html[data-active-skin="design-c"] .plugins-widget,
+html[data-active-skin="design-c"] .settings-group,
+html[data-active-skin="design-c"] .provider-config,
+html[data-active-skin="design-c"] .saved-workflows-panel,
+html[data-active-skin="design-c"] .workflow-node {
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+}
+
+html[data-active-skin="design-c"] .nav-btn,
+html[data-active-skin="design-c"] .capability-group-pad,
+html[data-active-skin="design-c"] .theme-btn,
+html[data-active-skin="design-c"] .compact-btn,
+html[data-active-skin="design-c"] .icon-btn,
+html[data-active-skin="design-c"] .icon-btn-sm,
+html[data-active-skin="design-c"] .primary-btn,
+html[data-active-skin="design-c"] .secondary-btn,
+html[data-active-skin="design-c"] .danger-btn,
+html[data-active-skin="design-c"] .send-button,
+html[data-active-skin="design-c"] .stop-button,
+html[data-active-skin="design-c"] input,
+html[data-active-skin="design-c"] textarea,
+html[data-active-skin="design-c"] select {
+  border-radius: 6px;
+  border-style: solid;
+  border-width: 1px;
+  border-color: var(--border-color);
+}
+
+html[data-active-skin="design-c"] .nav-btn.active,
+html[data-active-skin="design-c"] .capability-group-pad.active,
+html[data-active-skin="design-c"] .theme-btn.active {
+  border-color: color-mix(in srgb, var(--primary-color), transparent 35%);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--primary-color), #000000 12%);
+}
+
+html[data-active-skin="design-c"] .primary-btn,
+html[data-active-skin="design-c"] .send-button {
+  color: #ffffff;
+  border: none;
+  background: linear-gradient(
+    140deg,
+    color-mix(in srgb, var(--primary-color), #ffffff 8%),
+    color-mix(in srgb, var(--primary-color), #000000 16%)
+  );
+}
+
+html[data-active-skin="design-c"] .chat-tab,
+html[data-active-skin="design-c"] .chat-tab-new,
+html[data-active-skin="design-c"] .chat-tab-new-session {
+  border-radius: 999px;
+}
+
+html[data-active-skin="design-c"] .message.assistant,
+html[data-active-skin="design-c"] .message.system,
+html[data-active-skin="design-c"] .message.user {
+  border: 1px solid color-mix(in srgb, var(--border-color), transparent 20%);
 }

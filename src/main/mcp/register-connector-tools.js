@@ -1,4 +1,7 @@
+const fs = require('fs');
+const path = require('path');
 const { tokenizePath } = require('../path-tokens');
+const { normalizeConnectorName } = require('../connector-name-policy');
 
 function getPathTokenOptions(server) {
   const context = server.getCurrentAgentContext?.()
@@ -15,16 +18,25 @@ async function toPortablePath(server, absolutePath) {
   return tokenizePath(absolutePath, getPathTokenOptions(server));
 }
 
+async function assertConnectorPathAllowed(server, filePath, connectorsDir) {
+  await server.assertExecutionPathAllowed?.(filePath, {
+    extraRoots: [connectorsDir].filter(Boolean)
+  });
+}
+
 function registerConnectorTools(server) {
   function getConnectorFilePath(name) {
-    const fs = require('fs');
-    const path = require('path');
+    const safeName = normalizeConnectorName(name);
     const connectorsDir = server._connectorRuntime?.connectorsDir
       || path.join(__dirname, '../../../agentin/connectors');
     if (!fs.existsSync(connectorsDir)) {
       fs.mkdirSync(connectorsDir, { recursive: true });
     }
-    return path.join(connectorsDir, `${name}.js`);
+    return {
+      connectorsDir,
+      filePath: path.join(connectorsDir, `${safeName}.js`),
+      name: safeName
+    };
   }
 
   server.registerTool('connector_op', {
@@ -58,30 +70,31 @@ function registerConnectorTools(server) {
     if (!params.name) {
       return { error: 'name is required for this connector action' };
     }
+    const connectorName = normalizeConnectorName(params.name);
 
     if (action === 'create') {
       if (!params.code) return { error: 'code is required for create action' };
-      const fs = require('fs');
-      const filePath = getConnectorFilePath(params.name);
+      const { connectorsDir, filePath, name } = getConnectorFilePath(connectorName);
+      await assertConnectorPathAllowed(server, filePath, connectorsDir);
       fs.writeFileSync(filePath, params.code, 'utf-8');
-      return { success: true, path: await toPortablePath(server, filePath), name: params.name };
+      return { success: true, path: await toPortablePath(server, filePath), name };
     }
 
     if (action === 'start') {
-      return runtime.startConnector(params.name);
+      return runtime.startConnector(connectorName);
     }
 
     if (action === 'stop') {
-      return runtime.stopConnector(params.name);
+      return runtime.stopConnector(connectorName);
     }
 
     if (action === 'config_get') {
-      return runtime.getConfig(params.name);
+      return runtime.getConfig(connectorName);
     }
 
     if (action === 'config_set') {
       if (!params.key) return { error: 'key is required for config_set action' };
-      return runtime.setConfig(params.name, params.key, params.value);
+      return runtime.setConfig(connectorName, params.key, params.value);
     }
 
     return { error: `Unknown connector action: ${params.action}` };

@@ -15,6 +15,20 @@ const CONTRACTS = {
       voice: 'string',
       durationMs: 'number'
     }
+  },
+  stt: {
+    id: 'stt.v1',
+    capability: 'stt',
+    version: 1,
+    actions: ['transcribeAudio'],
+    transcribeParams: ['audioBase64', 'mimeType', 'language', 'prompt'],
+    transcribeResult: {
+      text: 'string',
+      detectedLanguage: 'string',
+      durationMs: 'number',
+      segmentCount: 'number',
+      provider: 'string'
+    }
   }
 };
 
@@ -76,6 +90,7 @@ function normalizeTtsSpeakResult(raw = {}) {
   return {
     ok: raw.ok !== false && kind !== 'none',
     contract: 'tts.v1',
+    provider: raw.provider || raw.engine || '',
     voice: raw.voice || raw.voiceId || raw.voice_id || '',
     durationMs: Number.isFinite(durationMs) ? durationMs : 0,
     audio: {
@@ -91,10 +106,30 @@ function normalizeTtsSpeakResult(raw = {}) {
   };
 }
 
+function normalizeSttTranscriptionResult(raw = {}) {
+  const text = String(raw.text || raw.transcript || raw.transcription || '').trim();
+  const detectedLanguage = String(raw.detectedLanguage || raw.detected_language || raw.language || '').trim();
+  const provider = String(raw.provider || raw.model || '').trim();
+  const durationSeconds = Number(raw.durationSeconds ?? raw.duration_seconds ?? raw.duration ?? 0);
+  const durationMs = Number(raw.durationMs ?? raw.duration_ms ?? (Number.isFinite(durationSeconds) ? durationSeconds * 1000 : 0));
+  const segmentCount = Number(raw.segmentCount ?? raw.segment_count ?? raw.segments_found ?? 0);
+
+  return {
+    ok: raw.success !== false,
+    contract: 'stt.v1',
+    text,
+    detectedLanguage,
+    durationMs: Number.isFinite(durationMs) ? Math.round(durationMs) : 0,
+    segmentCount: Number.isFinite(segmentCount) ? Math.max(0, Math.round(segmentCount)) : 0,
+    provider
+  };
+}
+
 module.exports = {
   CONTRACTS,
   getCapabilityContract,
   getManifestCapabilityContract,
+  normalizeSttTranscriptionResult,
   normalizeTtsSpeakResult,
   normalizeTtsVoices
 };

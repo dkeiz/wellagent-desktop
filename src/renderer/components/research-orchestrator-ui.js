@@ -114,7 +114,7 @@
     async function ensureChildSession(panel, agentId, childId, card) {
         const current = String(card.dataset.childSessionId || '').trim();
         if (current) return current;
-        const created = await window.electronAPI.invoke('create-chat-session');
+        const created = await window.electronAPI.createChatSession();
         const sessionId = String(created?.id || '').trim();
         if (!sessionId) return '';
         card.dataset.childSessionId = sessionId;

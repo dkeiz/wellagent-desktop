@@ -60,6 +60,10 @@ class FakeElement {
   querySelector() {
     return null;
   }
+
+  closest() {
+    return null;
+  }
 }
 
 function createOptionElement() {
@@ -199,6 +203,9 @@ function createProviderSelectionContext(source) {
     }
   };
 
+  const helpersPath = path.join(process.cwd(), 'src', 'renderer', 'components', 'api-provider-settings-helpers.js');
+  const helperSource = fs.readFileSync(helpersPath, 'utf8');
+  vm.runInNewContext(helperSource, context, { filename: 'api-provider-settings-helpers.js' });
   vm.runInNewContext(source, context, { filename: 'api-provider-settings.js' });
   return { context, elements, saveConfigCalls, testModelCalls };
 }
@@ -232,7 +239,10 @@ module.exports = {
     llmModelSelect.value = 'llama3';
     await llmModelSelect.emit('change');
 
-    assert.equal(saveConfigCalls.length, 0, 'Expected LLM settings selection alone not to persist immediately');
+    assert.ok(
+      saveConfigCalls.some(config => config.provider === 'ollama' && config.model === 'llama3'),
+      'Expected LLM provider/model selection to persist the current working model'
+    );
 
     customModelInput.value = 'custom-ollama-model';
     await testModelBtn.emit('click');

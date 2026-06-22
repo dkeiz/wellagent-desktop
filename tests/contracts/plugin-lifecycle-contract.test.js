@@ -16,6 +16,24 @@ module.exports = {
 
     await pluginManager.initialize();
     await pluginManager.enablePlugin('test-plugin');
+    assert.equal(
+      pluginManager.listPlugins().find(plugin => plugin.id === 'test-plugin')?.visibleInSidebar,
+      true,
+      'Plugins should show in the sidebar by default'
+    );
+
+    const hiddenState = pluginManager.setPluginSidebarVisible('test-plugin', false);
+    assert.equal(hiddenState.visibleInSidebar, false, 'Plugin sidebar visibility should toggle off');
+    assert.equal(
+      pluginManager.listPlugins().find(plugin => plugin.id === 'test-plugin')?.visibleInSidebar,
+      false,
+      'Plugin list should expose hidden sidebar visibility'
+    );
+    assert.equal(
+      pluginManager.getPluginDetail('test-plugin')?.visibleInSidebar,
+      false,
+      'Plugin detail should expose hidden sidebar visibility'
+    );
 
     const executeResult = await mcpServer.executeTool('plugin_test_plugin_hello', { name: 'Tester' });
     assert.equal(executeResult.success, true, 'Enabled plugin tool should execute');
@@ -41,8 +59,8 @@ module.exports = {
       name: 'Research Orchestrator',
       folderPath: path.join(rootDir, 'agentin', 'agents', 'pro', 'research-orchestrator')
     });
-    assert.includes(chatUI.html, 'Artifacts', 'Agent chat UI should render artifact panel');
     assert.includes(chatUI.html, 'Research Orchestrator', 'Agent chat UI should render individual agent panel');
+    assert.includes(chatUI.html, 'data-agent-ui-action="add-child"', 'Agent chat UI should render current research controls');
     const refreshResult = await pluginManager.runAgentChatUIAction(
       { slug: 'research-orchestrator', name: 'Research Orchestrator', folderPath: path.join(rootDir, 'agentin', 'agents', 'pro', 'research-orchestrator') },
       'refresh',

@@ -6,22 +6,77 @@ function runCheckSkins() { return require('../../tools/check-skins').runCheckSki
 function runApplySimulation() { return require('../../tools/test-skin-apply').runApplySimulation(); }
 const { createExternalTestControl } = require('./external-test-control');
 
+function wrapConsoleMethod(name) {
+  const original = console[name];
+  if (typeof original !== 'function') return;
+  console[name] = (...args) => {
+    try {
+      return original.apply(console, args);
+    } catch (error) {
+      if (error?.code === 'EPIPE') return;
+      throw error;
+    }
+  };
+}
+
+function ignoreBrokenPipeErrors(stream) {
+  if (!stream?.on) return;
+  stream.on('error', (error) => {
+    if (error?.code === 'EPIPE') return;
+    throw error;
+  });
+}
+
+wrapConsoleMethod('log');
+wrapConsoleMethod('info');
+wrapConsoleMethod('warn');
+wrapConsoleMethod('error');
+ignoreBrokenPipeErrors(process.stdout);
+ignoreBrokenPipeErrors(process.stderr);
+process.on('uncaughtException', (error) => {
+  if (error?.code === 'EPIPE') return;
+  throw error;
+});
+
 let runtime = null;
 let externalTestControl = null;
 let shutdownPromise = null;
 let allowImmediateQuit = false;
 
 const args = process.argv.slice(1);
-const isTestMode = args.includes('--test');
+// App-level launch modes:
+// - --skintest runs the skin-only headless checks and exits.
+// - --cli/--noui/-noui/--nowindow/--windowless all mean "boot backend without opening the main window".
+// Keep these aliases aligned with bootstrap.js and package.json.
+const isSkinTestMode = args.includes('--skintest');
 const isDevMode = args.includes('--dev');
-const isNoWindowMode = args.includes('--nowindow');
+const isCliMode = args.includes('--cli');
+const isCompanionQrMode = args.includes('--companion-qr');
+const isNoWindowMode = args.includes('--nowindow')
+  || isCliMode
+  || isCompanionQrMode
+  || args.includes('--noui')
+  || args.includes('-noui');
 const isTestClientMode = args.includes('--testclient');
 const isExternalTestMode = args.includes('--external-test');
-const isWindowlessMode = args.includes('--windowless') || args.includes('-windowless') || isNoWindowMode;
+const isWindowlessMode = args.includes('--windowless')
+  || args.includes('-windowless')
+  || isNoWindowMode;
 const externalPortArgIdx = args.indexOf('--external-port');
 const externalPort = externalPortArgIdx !== -1 && args[externalPortArgIdx + 1]
   ? Number(args[externalPortArgIdx + 1])
   : 8788;
+const userDataArgIdx = args.indexOf('--user-data-dir');
+const userDataOverride = process.env.LOCALAGENT_USER_DATA_PATH
+  || (userDataArgIdx !== -1 && args[userDataArgIdx + 1]
+    ? path.resolve(args[userDataArgIdx + 1])
+    : null);
+
+if (userDataOverride && app?.setPath) {
+  app.setPath('userData', userDataOverride);
+}
+
+process.env.LOCALAGENT_ELECTRON_APP_RUNTIME = '1';
 
 class IpcBridge {
   constructor(realIpcMain) {
@@ -46,21 +101,21 @@ class IpcBridge {
 const ipcBridge = new IpcBridge(ipcMain);
 
 if (!app || typeof app.whenReady !== 'function') {
-  if (isTestMode && isNoWindowMode) {
-    console.log('[HeadlessTest] Running in Node fallback mode...');
+  if (isSkinTestMode && isNoWindowMode) {
+    console.log('[SkinTest] Running in Node fallback mode...');
     const started = Date.now();
     const skinCheck = runCheckSkins();
     const skinApplySimulation = runApplySimulation();
     const durationMs = Date.now() - started;
     const report = {
-      mode: 'test-nowindow-node-fallback',
+      mode: 'skintest-nowindow-node-fallback',
       durationMs,
       checks: {
         skins: skinCheck,
         skinApplySimulation
       }
     };
-    console.log('[HeadlessTest] Report:');
+    console.log('[SkinTest] Report:');
     console.log(JSON.stringify(report, null, 2));
     process.exit(skinCheck.ok && skinApplySimulation.ok ? 0 : 1);
   } else {
@@ -69,20 +124,20 @@ if (!app || typeof app.whenReady !== 'function') {
 }
 
 async function runHeadlessSkinChecks() {
-  console.log('[HeadlessTest] Starting --test --nowindow checks...');
+  console.log('[SkinTest] Starting --skintest --nowindow checks...');
   const started = Date.now();
   const skinCheck = runCheckSkins();
   const skinApplySimulation = runApplySimulation();
   const durationMs = Date.now() - started;
   const report = {
-    mode: 'test-nowindow',
+    mode: 'skintest-nowindow',
     durationMs,
     checks: {
       skins: skinCheck,
       skinApplySimulation
     }
   };
-  console.log('[HeadlessTest] Report:');
+  console.log('[SkinTest] Report:');
   console.log(JSON.stringify(report, null, 2));
   app.exit(skinCheck.ok && skinApplySimulation.ok ? 0 : 1);
 }
@@ -94,15 +149,16 @@ async function runSeedScript(container) {
   }
 
   const seedPath = path.resolve(process.argv[seedIdx + 1]);
-  const db = container.get('db');
-  const workflowManager = container.get('workflowManager');
-  const mcpServer = container.get('mcpServer');
-
   console.log(`[Seed] Running seed script: ${seedPath}`);
   try {
     const seedFn = require(seedPath);
     if (typeof seedFn === 'function') {
-      await seedFn({ db, workflowManager, mcpServer });
+      await seedFn({
+        container,
+        db: container.get('db'),
+        workflowManager: container.get('workflowManager'),
+        mcpServer: container.get('mcpServer')
+      });
       console.log('[Seed] Seed script completed successfully');
     } else {
       console.error('[Seed] Seed script must export a function: module.exports = async ({ db, workflowManager }) => { ... }');
@@ -112,6 +168,46 @@ async function runSeedScript(container) {
   }
 }
 
+async function runCompanionQrOutput() {
+  const status = await ipcBridge.invoke('companion:status');
+  const host = String(status?.host || '0.0.0.0').trim() || '0.0.0.0';
+  const port = Number(status?.port) || 8790;
+
+  let ensuredStatus = status;
+  if (!status?.running) {
+    ensuredStatus = await ipcBridge.invoke('companion:enable', { host, port });
+    if (ensuredStatus?.success === false) {
+      throw new Error(ensuredStatus.error || 'Failed to start companion server');
+    }
+  }
+
+  const pairing = await ipcBridge.invoke('companion:generate-pairing');
+  if (!pairing?.success) {
+    throw new Error(pairing?.error || 'Failed to generate companion pairing code');
+  }
+  if (!pairing.nativeAppUrl || !pairing.preferredBrowserUrl) {
+    throw new Error('Companion pairing payload is missing QR targets');
+  }
+
+  const appQr = await ipcBridge.invoke('companion:render-qr', pairing.nativeAppUrl);
+  const webQr = await ipcBridge.invoke('companion:render-qr', pairing.preferredBrowserUrl);
+  if (!appQr?.success || !webQr?.success) {
+    throw new Error(appQr?.error || webQr?.error || 'Failed to render companion QR codes');
+  }
+
+  console.log('[CompanionQR] Pairing code:', pairing.code);
+  console.log('[CompanionQR] Expires:', pairing.expiresAt);
+  console.log('[CompanionQR] App URL:', pairing.nativeAppUrl);
+  console.log('[CompanionQR] Web URL:', pairing.preferredBrowserUrl);
+  console.log('[CompanionQR] Access mode:', ensuredStatus?.accessMode || 'unknown');
+  console.log('');
+  console.log('[CompanionQR] Android App QR');
+  console.log(appQr.terminal);
+  console.log('');
+  console.log('[CompanionQR] Web Companion QR');
+  console.log(webQr.terminal);
+}
+
 app.whenReady().then(async () => {
   try {
     // Hide native app menu in normal mode; keep it visible when explicitly running with --dev.
@@ -119,7 +215,8 @@ app.whenReady().then(async () => {
       Menu.setApplicationMenu(null);
     }
 
-    if (isTestMode && isNoWindowMode) {
+    // Skin test is intentionally a separate fast path, not the general backend runtime.
+    if (isSkinTestMode && isNoWindowMode) {
       await runHeadlessSkinChecks();
       return;
     }
@@ -130,7 +227,8 @@ app.whenReady().then(async () => {
       ipcMain: ipcBridge,
       args,
       isTestClientMode,
-      createInitialWindow: isExternalTestMode ? !isWindowlessMode : true,
+      // Normal app startup must respect the no-window aliases above.
+      createInitialWindow: !isWindowlessMode,
       autoStartDaemons: !isExternalTestMode
     });
 
@@ -162,6 +260,14 @@ app.whenReady().then(async () => {
 
     await runSeedScript(runtime.container);
 
+    if (isCompanionQrMode) {
+      await runCompanionQrOutput();
+      await runShutdownSequence();
+      allowImmediateQuit = true;
+      app.exit(0);
+      return;
+    }
+
     app.on('activate', () => {
       runtime?.handleActivate();
     });
@@ -172,6 +278,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  if (isWindowlessMode) return;
   if (process.platform !== 'darwin') {
     app.quit();
   }

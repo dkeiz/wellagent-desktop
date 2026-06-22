@@ -1,3 +1,77 @@
-html[data-active-skin=\"design-b\"] {
+html[data-active-skin="design-b"] {
   --skin-contract-id: design-b;
+  --border-radius: 10px;
+}
+
+html[data-active-skin="design-b"] body {
+  font-family: "Segoe UI", "Inter", Roboto, sans-serif;
+  letter-spacing: 0.01em;
+  background-image:
+    radial-gradient(circle at 14% 12%, color-mix(in srgb, var(--primary-color), transparent 84%), transparent 45%),
+    radial-gradient(circle at 86% 20%, color-mix(in srgb, var(--primary-color), transparent 90%), transparent 44%);
+  background-attachment: fixed;
+}
+
+html[data-active-skin="design-b"] .sidebar,
+html[data-active-skin="design-b"] .widget-panel,
+html[data-active-skin="design-b"] .messages-container,
+html[data-active-skin="design-b"] .calendar-widget,
+html[data-active-skin="design-b"] .agent-picker-widget,
+html[data-active-skin="design-b"] .subagents-widget,
+html[data-active-skin="design-b"] .workflows-widget,
+html[data-active-skin="design-b"] .plugins-widget,
+html[data-active-skin="design-b"] .settings-group,
+html[data-active-skin="design-b"] .provider-config,
+html[data-active-skin="design-b"] .saved-workflows-panel,
+html[data-active-skin="design-b"] .workflow-node {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+html[data-active-skin="design-b"] .nav-btn,
+html[data-active-skin="design-b"] .capability-group-pad,
+html[data-active-skin="design-b"] .theme-btn,
+html[data-active-skin="design-b"] .compact-btn,
+html[data-active-skin="design-b"] .icon-btn,
+html[data-active-skin="design-b"] .icon-btn-sm,
+html[data-active-skin="design-b"] .primary-btn,
+html[data-active-skin="design-b"] .secondary-btn,
+html[data-active-skin="design-b"] .danger-btn,
+html[data-active-skin="design-b"] .send-button,
+html[data-active-skin="design-b"] .stop-button,
+html[data-active-skin="design-b"] input,
+html[data-active-skin="design-b"] textarea,
+html[data-active-skin="design-b"] select {
+  border-radius: 10px;
+}
+
+html[data-active-skin="design-b"] .nav-btn.active,
+html[data-active-skin="design-b"] .capability-group-pad.active,
+html[data-active-skin="design-b"] .theme-btn.active {
+  border-color: color-mix(in srgb, var(--primary-color), transparent 45%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary-color), transparent 72%);
+}
+
+html[data-active-skin="design-b"] .primary-btn,
+html[data-active-skin="design-b"] .send-button {
+  border: none;
+  color: #ffffff;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--primary-color), #ffffff 5%),
+    color-mix(in srgb, var(--primary-color), #000000 12%)
+  );
+}
+
+html[data-active-skin="design-b"] .chat-tab-new,
+html[data-active-skin="design-b"] .chat-tab-new-session,
+html[data-active-skin="design-b"] .active-chat-tab {
+  border-radius: 999px;
+}
+
+html[data-active-skin="design-b"] .message.assistant,
+html[data-active-skin="design-b"] .message.system,
+html[data-active-skin="design-b"] .message.user {
+  border: 1px solid color-mix(in srgb, var(--border-color), transparent 18%);
 }

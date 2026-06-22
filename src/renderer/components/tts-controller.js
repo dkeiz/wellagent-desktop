@@ -24,6 +24,19 @@
         };
     }
 
+    function extractEmotionDirective(text) {
+        const source = String(text || '');
+        const re = /<!--\s*(?:emotion|mood)\s*(?::|=)\s*["']?([a-z][a-z0-9_-]*)["']?\s*-->/gi;
+        const valid = new Set(['neutral', 'happy', 'sad', 'surprised', 'thinking', 'angry', 'excited', 'sleepy', 'staring']);
+        let match;
+        let latest = null;
+        while ((match = re.exec(source)) !== null) {
+            const emotion = String(match[1] || '').toLowerCase();
+            if (valid.has(emotion)) latest = emotion;
+        }
+        return latest;
+    }
+
     class LocalAgentTtsController {
         constructor(options = {}) {
             this.panel = options.panel || null;
@@ -32,11 +45,11 @@
             this.audioContext = null;
             this.currentAbortController = null;
             this.currentSources = [];
+            this.activeSpeakKey = '';
+            this.activeSpeakToken = null;
+            this.isSpeaking = false;
             this.settings = {
                 defaultPluginId: '',
-                provider: 'browser',
-                voice: '',
-                voiceDescription: '',
                 speed: 1,
                 autoSpeak: false,
                 autoSpeakMode: 'answer'
@@ -112,21 +125,34 @@
             if (this.synthesis) {
                 this.synthesis.cancel();
             }
+            this.activeSpeakKey = '';
+            this.activeSpeakToken = null;
+            this.isSpeaking = false;
         }
 
         shouldUseBrowser() {
-            return !this.settings.defaultPluginId || this.settings.provider === 'browser';
+            return !this.settings.defaultPluginId;
         }
 
-        speakBrowser(text) {
-            if (!this.synthesis) {
-                return { ok: false, error: 'Built-in speech synthesis is unavailable' };
-            }
-            this.synthesis.cancel();
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.rate = Number(this.settings.speed || 1);
-            this.synthesis.speak(utterance);
-            return { ok: true, provider: 'browser' };
+        speakBrowser(text, token) {
+            return new Promise((resolve) => {
+                if (!this.synthesis) {
+                    resolve({ ok: false, error: 'Built-in speech synthesis is unavailable' });
+                    return;
+                }
+                this.synthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.rate = Number(this.settings.speed || 1);
+                utterance.onend = () => resolve({ ok: true, provider: 'browser' });
+                utterance.onerror = (event) => resolve({ ok: false, error: event.error || 'Browser speech failed', provider: 'browser' });
+                this.synthesis.speak(utterance);
+            }).finally(() => {
+                if (this.activeSpeakToken === token) {
+                    this.activeSpeakKey = '';
+                    this.activeSpeakToken = null;
+                    this.isSpeaking = false;
+                }
+            });
         }
 
         getPreparedText(rawText, options = {}) {
@@ -165,6 +191,10 @@
             source.buffer = audioBuffer;
             source.connect(audioContext.destination);
             state.scheduledAt = Math.max(state.scheduledAt, audioContext.currentTime + 0.02);
+            const ended = new Promise((resolve) => {
+                source.onended = () => resolve();
+            });
+            state.sourceEnds.push(ended);
             source.start(state.scheduledAt);
             state.scheduledAt += audioBuffer.duration;
             this.currentSources.push(source);
@@ -191,7 +221,8 @@
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 const state = {
-                    scheduledAt: audioContext.currentTime + 0.05
+                    scheduledAt: audioContext.currentTime + 0.05,
+                    sourceEnds: []
                 };
                 let buffer = '';
 
@@ -216,6 +247,7 @@
                     }
                 }
 
+                await Promise.allSettled(state.sourceEnds);
                 return { ok: true, provider: plan.provider || 'plugin-stream' };
             } catch (error) {
                 if (error?.name === 'AbortError') {
@@ -231,14 +263,25 @@
             await this.initPromise;
             await this.refreshSettings();
 
+            const emotion = extractEmotionDirective(rawText);
             const text = this.getPreparedText(rawText, options);
             if (!text) {
                 return { ok: false, skipped: true };
             }
 
+            const speakKey = `${options.mode || this.settings.autoSpeakMode || 'answer'}\n${text}`;
+            if (this.isSpeaking && this.activeSpeakKey === speakKey) {
+                await this.stop();
+                return { ok: true, stopped: true };
+            }
+
             await this.stop();
+            const token = Symbol('tts-speak');
+            this.activeSpeakToken = token;
+            this.activeSpeakKey = speakKey;
+            this.isSpeaking = true;
             if (this.shouldUseBrowser()) {
-                return this.speakBrowser(text);
+                return this.speakBrowser(text, token);
             }
 
             try {
@@ -247,25 +290,30 @@
                     'getStreamPlan',
                     {
                         text,
-                        provider: this.settings.provider,
-                        voice: this.settings.voice,
-                        style: this.settings.provider === 'fast-qwen' ? (this.settings.voiceDescription || '') : '',
+                        emotion,
                         speed: this.settings.speed
                     }
                 );
                 if (!planResponse?.success || !planResponse.result?.ok) {
                     throw new Error(planResponse?.error || 'Stream plan is unavailable');
                 }
-                return await this.playPluginStream(planResponse.result);
+                const result = await this.playPluginStream(planResponse.result);
+                if (this.activeSpeakToken === token) {
+                    this.activeSpeakKey = '';
+                    this.activeSpeakToken = null;
+                    this.isSpeaking = false;
+                }
+                return result;
             } catch (error) {
                 console.warn('Plugin TTS failed, falling back to browser speech:', error);
-                return this.speakBrowser(text);
+                return this.speakBrowser(text, token);
             }
         }
     }
 
     return {
         LocalAgentTtsController,
+        extractEmotionDirective,
         parseSseEvent
     };
 });

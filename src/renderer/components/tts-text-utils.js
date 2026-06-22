@@ -21,6 +21,12 @@
             .replace(/\bwww\.\S+/gi, 'link');
     }
 
+    function stripEmotionDirectives(text) {
+        return String(text || '')
+            .replace(/<!--\s*(?:emotion|mood)\s*(?::|=)\s*["']?[a-z][a-z0-9_-]*["']?\s*-->/gi, '')
+            .trim();
+    }
+
     function isMostlySymbols(text) {
         const compact = String(text || '').replace(/\s+/g, '');
         if (!compact) return true;
@@ -72,7 +78,7 @@
 
     function extractSpeakableText(rawText, mode) {
         const normalizedMode = String(mode || 'answer').trim().toLowerCase();
-        const sections = splitThinking(rawText);
+        const sections = splitThinking(stripEmotionDirectives(rawText));
         const parts = [];
 
         if (normalizedMode === 'thinking + answer' || normalizedMode === 'thinking+answer') {
@@ -91,6 +97,7 @@
         isMostlySymbols,
         normalizeSpeakText,
         replaceLinks,
-        splitThinking
+        splitThinking,
+        stripEmotionDirectives
     };
 });

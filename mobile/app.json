@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "LocalAgent Companion",
+    "slug": "localagent-companion",
+    "scheme": "localagent-companion",
+    "version": "0.2.0-beta.1",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0f"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0a0f"
+      },
+      "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
+      "usesCleartextTraffic": true,
+      "permissions": [
+        "INTERNET",
+        "CAMERA",
+        "RECORD_AUDIO",
+        "USE_BIOMETRIC",
+        "ACCESS_NETWORK_STATE"
+      ],
+      "package": "com.localagent.companion"
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-local-authentication",
+      "expo-camera",
+      "expo-image-picker",
+      "expo-av"
+    ]
+  }
+}

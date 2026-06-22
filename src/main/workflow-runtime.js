@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { buildRuntimePaths } = require('./runtime-paths');
 const {
   appendJsonLine,
   appendTraceSection,
@@ -16,7 +17,7 @@ class WorkflowRuntime {
   constructor(workflowManager, eventBus = null, basePath = null) {
     this.workflowManager = workflowManager;
     this.eventBus = eventBus;
-    this.basePath = basePath || path.join(process.cwd(), 'agentin', 'workflows', 'runs');
+    this.basePath = basePath || buildRuntimePaths().workflowBasePath;
     this.runsPath = path.join(this.basePath, 'runs');
     this.pendingRuns = new Map();
   }
@@ -235,6 +236,8 @@ class WorkflowRuntime {
         run.workflow_id,
         run.param_overrides || {},
         {
+          requestedBySessionId: run.requested_by_session_id || null,
+          workflowRunId: run.run_id,
           onStep: ({ id, type, tool, agent, success, result, output, error }) => {
             const event = {
               timestamp: new Date().toISOString(),

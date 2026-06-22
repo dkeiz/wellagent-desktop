@@ -148,6 +148,7 @@
 
         const dialog = document.createElement('div');
         const isCustomTool = request.toolName === 'create_tool';
+        const isTerminalScope = request.permissionType === 'terminal_scope';
         dialog.className = isCustomTool
             ? 'tool-permission-dialog tool-creation-dialog'
             : 'tool-permission-dialog';
@@ -191,6 +192,35 @@
             }));
 
             dialog.appendChild(buildPermissionHeader('🔧 Create New Tool', () => closePermissionDialog(panel)));
+            dialog.appendChild(content);
+            dialog.appendChild(actions);
+        } else if (isTerminalScope) {
+            const content = document.createElement('div');
+            content.className = 'permission-content';
+
+            const intro = document.createElement('p');
+            intro.innerHTML = '<strong>System terminal access requested</strong>';
+            const warning = document.createElement('p');
+            warning.className = 'tool-description';
+            warning.textContent = 'This command wants to run outside the execution workspace. System terminal access can search, read, or affect files across the machine depending on the command.';
+            appendLabeledParagraph(content, 'Command', request.command || request.params?.command || '');
+            appendLabeledParagraph(content, 'Working Directory', request.cwd || request.params?.cwd || '(default)');
+            content.insertBefore(warning, content.firstChild);
+            content.insertBefore(intro, content.firstChild);
+
+            const actions = document.createElement('div');
+            actions.className = 'permission-actions';
+            actions.appendChild(buildActionButton('Deny', 'btn-secondary permission-btn', () => {
+                denyToolPermission(panel);
+            }));
+            actions.appendChild(buildActionButton('Allow Once', 'btn-primary permission-btn', () => {
+                allowToolOnce(panel, request.toolName);
+            }));
+            actions.appendChild(buildActionButton('Enable System Terminal', 'btn-success permission-btn', () => {
+                enableTool(panel, request.toolName);
+            }));
+
+            dialog.appendChild(buildPermissionHeader('🔐 Terminal Scope Required', () => closePermissionDialog(panel)));
             dialog.appendChild(content);
             dialog.appendChild(actions);
         } else {
@@ -298,10 +328,13 @@
     async function allowToolOnce(panel, toolName) {
         const reqToolName = panel.currentPermissionRequest?.toolName;
         const reqParams = panel.currentPermissionRequest?.params;
+        const isTerminalScope = panel.currentPermissionRequest?.permissionType === 'terminal_scope';
         closePermissionDialog(panel);
 
         try {
-            const result = await window.electronAPI.executeMCPToolOnce(reqToolName, reqParams);
+            const result = await window.electronAPI.executeMCPToolOnce(reqToolName, reqParams, {
+                allowOutsideExecutionRootOnce: isTerminalScope
+            });
             await handleToolExecution(panel, toolName, result, reqToolName, reqParams);
         } catch (error) {
             console.error('Error allowing tool once:', error);
@@ -313,16 +346,25 @@
         const reqToolName = panel.currentPermissionRequest?.toolName;
         const reqParams = panel.currentPermissionRequest?.params;
         const reqAgentId = panel.currentPermissionRequest?.agentId || null;
+        const isTerminalScope = panel.currentPermissionRequest?.permissionType === 'terminal_scope';
         closePermissionDialog(panel);
 
         try {
-            await window.electronAPI.setToolActive(reqToolName, true, reqAgentId ? { agentId: reqAgentId } : {});
+            if (isTerminalScope) {
+                if (reqAgentId) {
+                    await window.electronAPI.permissions?.setAgentGroup?.(reqAgentId, 'terminal', 'system');
+                } else {
+                    await window.electronAPI.capability?.setTerminalMode?.('system');
+                }
+            } else {
+                await window.electronAPI.setToolActive(reqToolName, true, reqAgentId ? { agentId: reqAgentId } : {});
+            }
 
             if (window.sidebar && window.sidebar.loadMCPTools) {
                 await window.sidebar.loadMCPTools();
             }
 
-            showNotification(`✅ ${toolName} enabled permanently`);
+            showNotification(isTerminalScope ? '✅ System terminal enabled' : `✅ ${toolName} enabled permanently`);
 
             const result = await window.electronAPI.executeMCPToolOnce(reqToolName, reqParams);
             await handleToolExecution(panel, toolName, result, reqToolName, reqParams);
@@ -371,7 +413,7 @@
         }, 3000);
     }
 
-    window.mainPanelPermissions = {
+    const api = {
         allowToolOnce,
         approveToolCreation,
         closePermissionDialog,
@@ -382,4 +424,6 @@
         showNotification,
         showToolPermissionDialog
     };
+    window.localAgentRendererShell?.installPermissionApi?.(api);
+    window.mainPanelPermissions = api;
 })();

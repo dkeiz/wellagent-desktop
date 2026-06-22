@@ -16,7 +16,8 @@ module.exports = {
       create: [],
       invoke: [],
       deactivate: [],
-      wait: []
+      wait: [],
+      cancel: []
     };
 
     const searchAgent = {
@@ -53,6 +54,16 @@ module.exports = {
       async deactivateAgent(id) {
         calls.deactivate.push(id);
         return { success: true };
+      },
+      async cancelSubagentRun(runId, reason) {
+        calls.cancel.push({ runId, reason });
+        return {
+          success: true,
+          run: {
+            run_id: runId,
+            status: 'stopped'
+          }
+        };
       },
       async waitForSubagentRun(runId, timeoutMs) {
         calls.wait.push({ runId, timeoutMs });
@@ -164,6 +175,28 @@ module.exports = {
     assert.equal(stopResult.success, true, 'Expected subagent stop action to succeed');
     assert.equal(stopResult.result.action, 'stop', 'Expected stop action result');
     assert.deepEqual(calls.deactivate, [5], 'Expected stop action to deactivate the target sub-agent');
+
+    const stopRunResult = await server.executeTool('subagent', {
+      action: 'stop',
+      run_id: 'subtask-test-1'
+    });
+    assert.equal(stopRunResult.success, true, 'Expected scoped subagent run stop to succeed');
+    assert.equal(stopRunResult.result.action, 'stop', 'Expected scoped stop action result');
+    assert.deepEqual(calls.cancel, [{
+      runId: 'subtask-test-1',
+      reason: 'Stopped by subagent tool'
+    }], 'Expected scoped stop to cancel the delegated run');
+
+    calls.cancel.length = 0;
+    const stopFailedResult = await server.executeTool('subagent', {
+      action: 'stop',
+      run_id: 'failed-run-1'
+    });
+    assert.equal(stopFailedResult.success, true, 'Expected stop action to dispatch for failed run handles');
+    assert.deepEqual(calls.cancel, [{
+      runId: 'failed-run-1',
+      reason: 'Stopped by subagent tool'
+    }], 'Expected failed run stop to still go through cancellation path');
 
     const legacyResult = await server.executeTool('run_subagent', {
       agent_id: 5,

@@ -1,10 +1,14 @@
-/* Three-column layout system */
+/* Three-column layout system (classic mode) */
 .app-container {
+    height: 100vh;
+    overflow: hidden;
+}
+
+[data-layout-mode="classic"].app-container,
+.app-container:not([data-layout-mode]) {
     display: grid;
     grid-template-columns: 14% 68.5% 17.5%;
     grid-template-rows: 1fr;
-    height: 100vh;
-    overflow: hidden;
 }
 
 /* Left Column - Navigation */
@@ -111,7 +115,7 @@
 /* Central Column - Main Content */
 .content-panel {
     background-color: var(--main-bg);
-    padding: 1rem;
+    padding: var(--space-2) 1rem 1rem;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -169,7 +173,7 @@
     background-color: var(--chat-bg);
     border-radius: var(--border-radius);
     overscroll-behavior: contain;
-    scroll-behavior: smooth;
+    scroll-behavior: auto;
     scroll-padding-bottom: 1rem;
 }
 
@@ -202,7 +206,8 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
-    flex-shrink: 0;
+    flex: 0 1 190px;
+    min-width: 0;
 }
 
 /* Provider row with buttons */
@@ -210,6 +215,7 @@
     display: flex;
     gap: 0.2rem;
     align-items: center;
+    min-width: 0;
 }
 
 /* Compact select dropdowns for chat */
@@ -229,6 +235,7 @@
 .compact-select.model-select {
     max-width: 160px;
     width: 100%;
+    min-width: 0;
 }
 
 .compact-select:hover {
@@ -303,11 +310,14 @@
     display: flex;
     flex-direction: column;
     gap: 0.2rem;
-    max-height: 180px;
+    max-height: 280px;
     overflow: auto;
 }
 
 .artifacts-popover-item {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
     width: 100%;
     text-align: left;
     border: 1px solid var(--border-color);
@@ -318,12 +328,81 @@
     font-size: 0.76rem;
     cursor: pointer;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
 }
 
 .artifacts-popover-item:hover {
     background: rgba(127, 127, 127, 0.12);
+}
+
+.artifacts-popover-item.accepted {
+    border-color: rgba(46, 160, 67, 0.4);
+    background: rgba(46, 160, 67, 0.06);
+}
+
+.artifacts-popover-item.virtual {
+    border-style: dashed;
+    cursor: default;
+}
+
+.artifact-item-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.artifact-source {
+    flex-shrink: 0;
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    opacity: 0.7;
+    max-width: 70px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.artifact-item-actions {
+    display: flex;
+    gap: 0.15rem;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.artifacts-popover-item:hover .artifact-item-actions {
+    opacity: 1;
+}
+
+.artifact-action-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.72rem;
+    padding: 0.1rem 0.2rem;
+    border-radius: 3px;
+    line-height: 1;
+    transition: color 0.15s, background 0.15s;
+}
+
+.artifact-action-btn:hover {
+    background: rgba(127, 127, 127, 0.2);
+}
+
+.artifact-accept-btn:hover,
+.artifact-accept-btn.active {
+    color: #2ea043;
+}
+
+.artifacts-popover-item.accepted .artifact-accept-btn {
+    opacity: 1;
+    color: #2ea043;
+}
+
+.artifact-clean-btn:hover {
+    color: #f85149;
 }
 
 .artifacts-popover-empty {
@@ -495,6 +574,53 @@
     /* Allow this to grow */
     min-height: 0;
     /* Needed for flex-grow in a flex column */
+}
+
+.agent-behavior-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.agent-behavior-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 0.5rem;
+}
+
+.agent-behavior-option {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.35rem 0.5rem;
+    align-items: center;
+    padding: 0.55rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    background: var(--card-bg);
+    opacity: 0.56;
+}
+
+.agent-behavior-option.active {
+    opacity: 1;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 1px var(--primary-color);
+}
+
+.agent-behavior-title {
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.agent-behavior-option textarea {
+    grid-column: 1 / -1;
+    min-height: 4.5rem;
+    resize: vertical;
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    color: var(--text-primary);
+    background: var(--input-bg, var(--bg-secondary));
 }
 
 #system-prompt {

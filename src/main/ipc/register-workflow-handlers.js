@@ -1,3 +1,5 @@
+const { redactSettingsForRenderer, saveGenericSetting } = require('../settings-security');
+
 function registerWorkflowHandlers(ipcMain, runtime) {
   const {
     db,
@@ -168,7 +170,7 @@ function registerWorkflowHandlers(ipcMain, runtime) {
   });
 
   ipcMain.handle('get-settings', async () => {
-    const settings = await db.getAllSettings();
+    const settings = redactSettingsForRenderer(await db.getAllSettings());
     const apiKeys = {};
     for (const provider of aiService.getProviders()) {
       const info = typeof db.getAPIKeyInfo === 'function'
@@ -181,7 +183,7 @@ function registerWorkflowHandlers(ipcMain, runtime) {
 
   ipcMain.handle('update-settings', async (event, settings) => {
     for (const [key, value] of Object.entries(settings)) {
-      await db.setSetting(key, value);
+      await saveGenericSetting(db, key, value);
     }
     return { success: true };
   });

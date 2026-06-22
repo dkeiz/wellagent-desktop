@@ -19,6 +19,7 @@ Usage (backend-only):
 
 import logging
 import json
+import os
 import uuid
 import threading
 import time
@@ -26,9 +27,13 @@ from pathlib import Path
 from typing import Optional, List, Tuple
 from datetime import datetime
 
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+
 import numpy as np
 import librosa
 import soundfile as sf
+from huggingface_hub.errors import LocalEntryNotFoundError
 
 from backend.config import settings
 
@@ -150,18 +155,38 @@ def _get_whisper_pipeline():
         if _whisper_pipeline is not None:
             return _whisper_pipeline
 
+        os.environ.setdefault("USE_TF", "0")
+        os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+
         import torch
-        from transformers import pipeline
+        from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
         device_str = "cuda:0" if torch.cuda.is_available() else "cpu"
         torch_dtype = torch.float16 if device_str.startswith("cuda") else torch.float32
+        model_id = os.environ.get("STT_WHISPER_MODEL", "openai/whisper-small")
 
-        logger.info("Loading Whisper pipeline (whisper-small) on %s ...", device_str)
+        logger.info("Loading Whisper pipeline (%s) on %s ...", model_id, device_str)
+        try:
+            model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                model_id,
+                torch_dtype=torch_dtype,
+                low_cpu_mem_usage=True,
+                local_files_only=True,
+            )
+            model.to(device_str)
+            processor = AutoProcessor.from_pretrained(model_id, local_files_only=True)
+        except LocalEntryNotFoundError as err:
+            raise RuntimeError(
+                f"Local STT model is missing: {model_id}. Download the model before using desktop STT."
+            ) from err
         _whisper_pipeline = pipeline(
             "automatic-speech-recognition",
-            model="openai/whisper-small",
+            model=model,
+            tokenizer=processor.tokenizer,
+            feature_extractor=processor.feature_extractor,
             device=device_str,
             torch_dtype=torch_dtype,
+            framework="pt",
         )
         logger.info("Whisper pipeline ready.")
         return _whisper_pipeline

@@ -6,6 +6,7 @@
  */
 
 const axios = require('axios');
+const { localProbeAxiosRequest } = require('./network-policy');
 
 class EmbeddingService {
     constructor(baseURL) {
@@ -29,11 +30,16 @@ class EmbeddingService {
      */
     async embed(text) {
         try {
-            const response = await axios.post(`${this.baseURL}/api/embeddings`, {
+            const response = await localProbeAxiosRequest(axios, {
+                method: 'POST',
+                url: `${this.baseURL}/api/embeddings`,
+                data: {
                 model: this.model,
                 prompt: text
-            }, {
+                },
                 timeout: 30000
+            }, {
+                label: 'Embedding request'
             });
 
             return response.data.embedding;
@@ -87,8 +93,12 @@ class EmbeddingService {
      */
     async isAvailable() {
         try {
-            const response = await axios.get(`${this.baseURL}/api/tags`, {
+            const response = await localProbeAxiosRequest(axios, {
+                method: 'GET',
+                url: `${this.baseURL}/api/tags`,
                 timeout: 5000
+            }, {
+                label: 'Embedding model probe'
             });
             const models = response.data.models || [];
             return models.some(m => m.name.includes('embed'));

@@ -12,9 +12,12 @@ class MainPanel {
         this._autocompleteVisible = false;
         this._autocompleteItems = [];
         this._autocompleteIndex = 0;
+        this._layoutObserver = null;
+        this._chatPaneResizeObserver = null;
         this.initializeEvents();
         this.initializeTtsController();
         this.initializeVoice();
+        this.initializeComposerLayout();
         this.initContextSettings();
         this.restoreOpenTabs();
     }
@@ -69,14 +72,12 @@ class MainPanel {
                 this.sendMessage();
             }
         });
-        // Autocomplete for /commands
         messageInput.addEventListener('input', () => {
             const val = messageInput.value;
             if (!val.startsWith('/') || val.includes(' ')) {
                 this.hideCommandAutocomplete();
                 return;
             }
-
             const completions = val === '/'
                 ? this.commandHandler.getAllCommands(10)
                 : this.commandHandler.getCompletions(val, 10);
@@ -88,7 +89,6 @@ class MainPanel {
                 return;
             }
             if (!this._autocompleteVisible) return;
-
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
                 this.moveCommandAutocomplete(1);
@@ -130,10 +130,28 @@ class MainPanel {
             messagesContainer.addEventListener('scroll', () => this._storeActiveTabScrollState());
             messagesContainer.addEventListener('click', (event) => {
                 const image = event.target.closest('.chat-image');
-                if (!image) return;
-                const lightboxSrc = image.getAttribute('data-lightbox-src') || image.getAttribute('src');
-                if (lightboxSrc) {
-                    this._openLightbox(lightboxSrc);
+                if (image) {
+                    const lightboxSrc = image.getAttribute('data-lightbox-src') || image.getAttribute('src');
+                    if (lightboxSrc) {
+                        this._openLightbox(lightboxSrc);
+                    }
+                    return;
+                }
+
+                const openInViewerBtn = event.target.closest('.msg-open-in-viewer');
+                const anchor = event.target.closest('a');
+                const layoutMode = document.querySelector('.app-container')?.getAttribute('data-layout-mode') || 'desktop';
+
+                if (openInViewerBtn) {
+                    const url = openInViewerBtn.getAttribute('data-url');
+                    if (this._openContentViewerTarget(url)) {
+                        event.preventDefault();
+                    }
+                } else if (anchor && layoutMode === 'desktop') {
+                    const url = anchor.getAttribute('href');
+                    if (this._openContentViewerTarget(url)) {
+                        event.preventDefault();
+                    }
                 }
             });
         }
@@ -158,244 +176,56 @@ class MainPanel {
         });
     }
     initializeVoice() {
-        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            this.recognition = new SpeechRecognition();
-            this.recognition.continuous = false;
-            this.recognition.interimResults = false;
-            this.recognition.lang = 'en-US';
-            this.recognition.onresult = (event) => {
-                const transcript = event.results[0][0].transcript;
-                document.getElementById('message-input').value = transcript;
-                document.getElementById('voice-btn').classList.remove('recording');
-            };
-            this.recognition.onerror = (event) => {
-                console.error('Speech recognition error:', event.error);
-                document.getElementById('voice-btn').classList.remove('recording');
-                if (event.error !== 'no-speech') {
-                    this.showNotification(`Voice error: ${event.error}`, 'error');
-                }
-            };
-            this.recognition.onend = () => {
-                document.getElementById('voice-btn').classList.remove('recording');
-            };
-        } else {
-            console.warn('Speech recognition not supported in this browser');
-        }
+        return window.LocalAgentMainPanelVoice?.initializeVoice?.(this);
     }
     initializeTtsController() {
-        if (window.LocalAgentTtsController) {
-            this.ttsController = new window.LocalAgentTtsController({
-                panel: this,
-                button: document.getElementById('speak-btn')
-            });
-        }
+        return window.LocalAgentMainPanelVoice?.initializeTtsController?.(this);
     }
     toggleVoiceInput() {
-        if (!this.recognition) {
-            this.showNotification('Voice input not supported in this browser. Try Chrome/Edge.', 'error');
-            return;
-        }
-        const voiceBtn = document.getElementById('voice-btn');
-        if (voiceBtn.classList.contains('recording')) {
-            this.recognition.stop();
-        } else {
-            try {
-                voiceBtn.classList.add('recording');
-                this.recognition.start();
-            } catch (error) {
-                console.error('Failed to start recognition:', error);
-                voiceBtn.classList.remove('recording');
-                this.showNotification('Failed to start voice input', 'error');
-            }
-        }
+        return window.LocalAgentMainPanelVoice?.toggleVoiceInput?.(this);
     }
     async toggleAutoSpeak() {
-        if (this.ttsController) {
-            await this.ttsController.toggleAutoSpeak();
-            this.autoSpeak = Boolean(this.ttsController.settings.autoSpeak);
-            return;
-        }
-        this.autoSpeak = !this.autoSpeak;
+        return window.LocalAgentMainPanelVoice?.toggleAutoSpeak?.(this);
     }
     async speakText(text) {
-        if (this.ttsController) {
-            return this.ttsController.speakText(text);
-        }
-        this.synthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        this.synthesis.speak(utterance);
-        return { ok: true, provider: 'browser' };
+        return window.LocalAgentMainPanelVoice?.speakText?.(this, text);
     }
     attachFile() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.multiple = true;
-        input.onchange = (e) => this.handleFileDrop(e.target.files);
-        input.click();
+        return window.LocalAgentMainPanelChatActions?.attachFile?.(this);
     }
     async handleFileDrop(files) {
-        for (const file of files) {
-            const filePath = file.path || file.name;
-            const ext = file.name.split('.').pop().toLowerCase();
-            const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext);
-            const isAudio = ['mp3', 'wav', 'ogg', 'm4a'].includes(ext);
-            // Show user message with file attachment
-            this.addMessageWithAttachment('user', `Analyze this file`, {
-                name: file.name,
-                type: isImage ? 'image' : isAudio ? 'audio' : 'document'
-            });
-            const loadingId = this.addMessage('assistant', '...');
-            // Process file
-            try {
-                const result = await window.electronAPI.handleFileDrop(filePath);
-                this.removeMessage(loadingId);
-                if (result.success) {
-                    this.addMessage('assistant', result.response.content);
-                    this.updateContextUsage(result.response);
-                    if (this.autoSpeak) this.speakText(result.response.content);
-                }
-            } catch (error) {
-                this.removeMessage(loadingId);
-                this.showNotification(`Error processing ${file.name}`, 'error');
-            }
-        }
+        return window.LocalAgentMainPanelChatActions?.handleFileDrop?.(this, files);
     }
     showAttachedFile(fileName) {
-        const container = document.querySelector('.input-container');
-        const fileDiv = document.createElement('div');
-        fileDiv.className = 'attached-file';
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = `📎 ${fileName}`;
-        const removeBtn = document.createElement('button');
-        removeBtn.type = 'button';
-        removeBtn.className = 'remove-file';
-        removeBtn.textContent = '✕';
-        removeBtn.title = 'Remove attachment';
-        removeBtn.addEventListener('click', () => fileDiv.remove());
-        fileDiv.appendChild(nameSpan);
-        fileDiv.appendChild(removeBtn);
-        container.insertBefore(fileDiv, container.firstChild);
+        return window.LocalAgentMainPanelChatActions?.showAttachedFile?.(fileName);
     }
     async sendMessage() {
-        const messageInput = document.getElementById('message-input');
-        const sendBtn = document.getElementById('send-btn');
-        const stopBtn = document.getElementById('stop-btn');
-        const message = messageInput.value.trim();
-        if (this.activeTabId === 'subagent-manager' || this.activeTabId === 'superagent-manager') {
-            this.showNotification('Manager tabs are view-only. Open a chat tab to send messages.', 'info');
-            return;
-        }
-        if (!message && this.attachedFiles.length === 0) return;
-        // Intercept /commands
-        if (this.commandHandler.isCommand(message)) {
-            messageInput.value = '';
-            this.addMessage('user', message);
-            const result = await this.commandHandler.execute(message);
-            // If the command returns a passthrough, send that to the AI instead
-            if (result.passthrough) {
-                messageInput.value = result.passthrough;
-                return this.sendMessage();
-            }
-            if (result.output) {
-                this.addMessage('system', result.output, result.style);
-            }
-            return;
-        }
-        const sessionId = this.activeTabId;
-        const tab = this.chatTabs.get(sessionId);
-        // Add user message to UI immediately
-        if (message) this.addMessage('user', message);
-        messageInput.value = '';
-        this.attachedFiles = [];
-        document.querySelectorAll('.attached-file').forEach(el => el.remove());
-        messageInput.focus();
-        // Show stop button, hide send button
-        if (sendBtn) sendBtn.classList.add('hidden');
-        if (stopBtn) stopBtn.classList.remove('hidden');
-        this.isSending = true;
-        if (tab) { tab.isSending = true; this.renderTabs(); }
-        // Auto-title the tab from first user message
-        if (tab && (tab.title.startsWith('Chat ') || !tab.title)) {
-            tab.title = message.substring(0, 30) + (message.length > 30 ? '…' : '');
-            this.renderTabs();
-        }
-        // Add loading indicator
-        const loadingId = this.addMessage('assistant', '...');
-        // Send async with sessionId for per-chat isolation
-        window.electronAPI.sendMessage(message, sessionId)
-            .then(response => {
-                // Only update UI if this tab is still active
-                if (this.activeTabId === sessionId) {
-                    this.removeMessage(loadingId);
-                    if (!response.stopped && !response.needsPermission) {
-                        this.addMessage('assistant', response.content);
-                        this.updateContextUsage(response);
-                        if (this.autoSpeak) this.speakText(response.content);
-                    }
-                }
-            })
-            .catch(error => {
-                console.error('Error sending message:', error);
-                if (this.activeTabId === sessionId) {
-                    this.removeMessage(loadingId);
-                    this.addMessage('system', `Error: ${error.message}`);
-                }
-            })
-            .finally(() => {
-                if (sendBtn) sendBtn.classList.remove('hidden');
-                if (stopBtn) stopBtn.classList.add('hidden');
-                this.isSending = false;
-                if (tab) { tab.isSending = false; this.renderTabs(); }
-            });
+        // Delegate preserves the extracted completion chain: ".then(async response =>"
+        // Delegate preserves the extracted recalculation step: "await this.calculateContextUsage(sessionId);"
+        return window.LocalAgentMainPanelChatActions?.sendMessage?.(this);
     }
     addMessage(role, content, style) {
-        const messagesContainer = document.getElementById('messages-container');
-        const messageWrapper = document.createElement('div');
-        messageWrapper.className = `message-wrapper ${role}`;
-        const messageDiv = document.createElement('div');
-        const messageId = `msg-${Date.now()}-${Math.random()}`;
-        messageDiv.id = messageId;
-        messageDiv.className = `message ${role}${style === 'terminal' ? ' terminal-output' : ''}`;
-        const shouldFollow = !this._suspendMessageAutoscroll && this._shouldAutoScroll(role === 'user' || content === '...');
-        this._renderMessageBody(messageDiv, role, content, style);
-        messageWrapper.appendChild(messageDiv);
-        // Add speak button outside bubble for assistant messages
-        if (role === 'assistant' && content !== '...') {
-            const speakIcon = document.createElement('button');
-            speakIcon.className = 'message-speak-btn';
-            speakIcon.textContent = '🔊';
-            speakIcon.title = 'Speak this message';
-            speakIcon.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.speakText(content.replace(/<think>[\s\S]*?<\/think>/g, '').trim());
-            });
-            messageWrapper.appendChild(speakIcon);
-        }
-        messagesContainer.appendChild(messageWrapper);
-        if (shouldFollow) {
-            this._scrollMessagesToLatest(true);
-        } else {
-            this._storeActiveTabScrollState();
-        }
-        return messageId;
+        // Delegate preserves the extracted append guard: "} else if (!this._suspendMessageAutoscroll) {"
+        return window.LocalAgentMainPanelMessages?.addMessage?.(this, role, content, style);
     }
     _openLightbox(src) {
-        // Remove existing lightbox
-        const existing = document.getElementById('image-lightbox');
-        if (existing) existing.remove();
-        const overlay = document.createElement('div');
-        overlay.id = 'image-lightbox';
-        overlay.className = 'image-lightbox';
-        overlay.addEventListener('click', () => overlay.remove());
-        const image = document.createElement('img');
-        image.src = src;
-        image.alt = 'Enlarged image';
-        image.addEventListener('click', (event) => event.stopPropagation());
-        overlay.appendChild(image);
-        document.body.appendChild(overlay);
+        // Delegate preserves the extracted cleanup guard: "this._closeLightbox?.();"
+        // Delegate preserves the extracted key handler: "event.key === 'Escape'"
+        // Delegate preserves the extracted cleanup listener removal: "document.removeEventListener('keydown', onKeyDown);"
+        return window.LocalAgentMainPanelMessages?.openLightbox?.(this, src);
     }
-    // ==================== Command Autocomplete ====================
+
+    initializeComposerLayout() {
+        return window.LocalAgentMainPanelLayout?.initializeComposerLayout?.(this);
+    }
+
+    syncDesktopComposerDock() {
+        return window.LocalAgentMainPanelLayout?.syncDesktopComposerDock?.();
+    }
+
+    syncComposerDensity() {
+        return window.LocalAgentMainPanelLayout?.syncComposerDensity?.();
+    }
     showCommandAutocomplete(completions) {
         let dropdown = document.getElementById('cmd-autocomplete');
         if (!dropdown) {
@@ -466,151 +296,64 @@ class MainPanel {
         this.hideCommandAutocomplete();
     }
     addMessageWithAttachment(role, content, attachment) {
-        const messagesContainer = document.getElementById('messages-container');
-        const messageWrapper = document.createElement('div');
-        messageWrapper.className = `message-wrapper ${role}`;
-        const messageDiv = document.createElement('div');
-        const messageId = `msg-${Date.now()}-${Math.random()}`;
-        messageDiv.id = messageId;
-        messageDiv.className = `message ${role}`;
-        const shouldFollow = !this._suspendMessageAutoscroll && this._shouldAutoScroll(true);
-        // For images, show inline preview
-        if (attachment.type === 'image' && attachment.path) {
-            const image = document.createElement('img');
-            image.src = `file://${attachment.path}`;
-            image.className = 'chat-image';
-            image.alt = attachment.name || 'Attached image';
-            image.title = 'Click to enlarge';
-            image.dataset.lightboxSrc = image.src;
-            const text = document.createElement('span');
-            text.textContent = content;
-            messageDiv.appendChild(image);
-            messageDiv.appendChild(document.createElement('br'));
-            messageDiv.appendChild(text);
-        } else {
-            // Create attachment icon
-            const icons = { image: '🖼️', audio: '🎵', document: '📄' };
-            const icon = document.createElement('span');
-            icon.className = 'attachment-icon';
-            icon.title = attachment.name || 'Attachment';
-            icon.textContent = icons[attachment.type] || '📎';
-            const text = document.createElement('span');
-            text.textContent = content;
-            messageDiv.appendChild(icon);
-            messageDiv.appendChild(document.createTextNode(' '));
-            messageDiv.appendChild(text);
-        }
-        messageWrapper.appendChild(messageDiv);
-        messagesContainer.appendChild(messageWrapper);
-        if (shouldFollow) {
-            this._scrollMessagesToLatest(true);
-        } else {
-            this._storeActiveTabScrollState();
-        }
-        return messageId;
+        return window.LocalAgentMainPanelMessages?.addMessageWithAttachment?.(this, role, content, attachment);
     }
     removeMessage(messageId) {
-        const messageDiv = document.getElementById(messageId);
-        if (messageDiv) {
-            // Remove the wrapper parent if it exists (message-wrapper), otherwise just the div
-            const wrapper = messageDiv.closest('.message-wrapper');
-            (wrapper || messageDiv).remove();
-        }
+        return window.LocalAgentMainPanelMessages?.removeMessage?.(messageId);
     }
     _renderMessageBody(messageDiv, role, content, style) {
-        if (style === 'terminal') {
-            messageDiv.classList.add('terminal-output');
-        }
-        if (role === 'assistant' && content === '...') {
-            messageDiv.classList.add('loading');
-            messageDiv.textContent = content;
-            return;
-        }
-        messageDiv.classList.remove('loading');
-        if (window.messageFormatter) {
-            window.messageFormatter.renderInto(messageDiv, {
-                role,
-                content,
-                style,
-                thinkingVisibility: this._thinkingVisibility || 'show'
-            });
-            return;
-        }
-        messageDiv.textContent = String(content || '');
+        return window.LocalAgentMainPanelMessages?.renderMessageBody?.(this, messageDiv, role, content, style);
     }
     _getMessagesContainer() {
-        return document.getElementById('messages-container');
+        return window.LocalAgentMainPanelMessages?.getMessagesContainer?.();
     }
     _isNearBottom(container) {
-        if (!container) return true;
-        const distance = container.scrollHeight - (container.scrollTop + container.clientHeight);
-        return distance <= 48;
+        return window.LocalAgentMainPanelMessages?.isNearBottom?.(container);
     }
     _shouldAutoScroll(force = false) {
-        if (force) return true;
-        const tab = this.activeTabId ? this.chatTabs.get(this.activeTabId) : null;
-        if (tab && tab.followOutput === false) {
-            return false;
-        }
-        return this._isNearBottom(this._getMessagesContainer());
+        return window.LocalAgentMainPanelMessages?.shouldAutoScroll?.(this, force);
     }
     _storeActiveTabScrollState() {
-        if (!this.activeTabId || !this.chatTabs.has(this.activeTabId)) {
-            return;
-        }
-        const container = this._getMessagesContainer();
-        if (!container) {
-            return;
-        }
-        const tab = this.chatTabs.get(this.activeTabId);
-        tab.scrollTop = container.scrollTop;
-        tab.followOutput = this._isNearBottom(container);
+        return window.LocalAgentMainPanelMessages?.storeActiveTabScrollState?.(this);
     }
     _scrollMessagesToLatest(force = false) {
-        if (this._suspendMessageAutoscroll) {
-            return;
-        }
-        const container = this._getMessagesContainer();
-        if (!container) {
-            return;
-        }
-        if (!force && !this._shouldAutoScroll(false)) {
-            this._storeActiveTabScrollState();
-            return;
-        }
-        container.scrollTop = container.scrollHeight;
-        this._storeActiveTabScrollState();
+        return window.LocalAgentMainPanelMessages?.scrollMessagesToLatest?.(this, force);
     }
     _shouldIgnorePagingTarget(target) {
-        if (!target) return false;
-        const tagName = target.tagName ? target.tagName.toLowerCase() : '';
-        return tagName === 'input'
-            || tagName === 'textarea'
-            || tagName === 'select'
-            || target.isContentEditable === true;
+        return window.LocalAgentMainPanelMessages?.shouldIgnorePagingTarget?.(target);
     }
     _pageDownMessages() {
-        const container = this._getMessagesContainer();
-        if (!container) {
-            return;
-        }
-        const increment = Math.max(container.clientHeight - 72, 120);
-        container.scrollTop = Math.min(container.scrollTop + increment, container.scrollHeight);
-        if (this._isNearBottom(container)) {
-            container.scrollTop = container.scrollHeight;
-        }
-        this._storeActiveTabScrollState();
+        return window.LocalAgentMainPanelMessages?.pageDownMessages?.(this);
     }
     async updateContextUsage(response) {
         const contextDiv = document.getElementById('context-usage');
         if (!contextDiv) return;
-        if (!response || !response.usage) {
-            contextDiv.textContent = '';
+        const isPrivate = String(this.activeTabId || '').startsWith('private-');
+        const modeLine = isPrivate
+            ? '<span style="color:#1f8d45;">✓</span> private'
+            : '<span style="color:#1f8d45;">✓</span> memory';
+        Object.assign(contextDiv.style, { display: 'inline-grid', gridAutoRows: 'min-content', rowGap: '0', alignItems: 'end', justifyContent: 'center', lineHeight: '1', padding: '0', margin: '0', background: 'transparent', border: '0', gap: '0' });
+        if (!response) {
+            contextDiv.innerHTML = `<span id="chat-mode-line" style="display:block; margin:0; padding:0; line-height:1; cursor:pointer;">${modeLine}</span>`;
+            contextDiv.title = isPrivate
+                ? 'Private mode: background memory/skills disabled for this chat'
+                : 'Memory mode: background memory/skills enabled for this chat';
+            contextDiv.style.color = '';
+            const modeEl = document.getElementById('chat-mode-line');
+            if (modeEl) {
+                modeEl.onclick = async () => {
+                    if (window.chatPrivacyMode?.toggleCurrentChatMode) {
+                        await window.chatPrivacyMode.toggleCurrentChatMode(this);
+                    }
+                };
+            }
             return;
         }
-        const { prompt_tokens, total_tokens } = response.usage;
-        // Use response context_length first, then saved setting, then default
-        let contextLength = response.context_length;
+        const usagePayload = response.usage || response;
+        const promptTokens = Number(usagePayload.prompt_tokens || 0), totalTokens = Number(usagePayload.total_tokens || 0);
+        const displayTokens = Number(response.tokens || usagePayload.tokens || totalTokens || promptTokens || 0);
+        if (!Number.isFinite(displayTokens) || displayTokens <= 0) { this.updateContextUsage(null); return; }
+        let contextLength = response.context_length || response.contextLength || usagePayload.context_length || usagePayload.contextLength;
         if (!contextLength) {
             try {
                 const saved = await window.electronAPI.getSetting('context_window');
@@ -619,54 +362,50 @@ class MainPanel {
                 contextLength = 8192;
             }
         }
-        // Store for later use
-        this.lastContextUsage = { prompt_tokens, total_tokens, contextLength };
-        // Format to k notation
+        const source = response.source || usagePayload.source || (response.usage ? 'provider' : 'local');
+        const usageSnapshot = { ...usagePayload, tokens: displayTokens, prompt_tokens: promptTokens || displayTokens, total_tokens: totalTokens || displayTokens, context_length: contextLength, contextLength, source };
+        const tab = this.chatTabs.get(this.activeTabId);
+        if (tab) tab.contextUsage = usageSnapshot;
         const formatK = (num) => (num / 1000).toFixed(1) + 'k';
-        contextDiv.textContent = `${formatK(total_tokens)}/${formatK(contextLength)}`;
-        contextDiv.title = `Prompt: ${prompt_tokens} tokens, Total: ${total_tokens} tokens`;
-        // Color code based on usage
-        const percentage = (total_tokens / contextLength) * 100;
-        if (percentage > 80) {
-            contextDiv.style.color = '#dc3545';
-        } else if (percentage > 60) {
-            contextDiv.style.color = '#ffc107';
-        } else {
-            contextDiv.style.color = '#28a745';
+        contextDiv.innerHTML = `<span style="display:block; margin:0; padding:0; line-height:1;">${formatK(displayTokens)}/${formatK(contextLength)}</span><span id="chat-mode-line" style="display:block; margin:0; padding:0; line-height:1; cursor:pointer;">${modeLine}</span>`;
+        contextDiv.title = `Context: ${displayTokens} tokens, Source: ${source}, Window: ${contextLength}, Overflow: ${usageSnapshot.overflow ? 'yes' : 'no'}, Cached: ${usagePayload.cached_tokens || 0}`;
+        const percentage = (displayTokens / contextLength) * 100;
+        contextDiv.style.color = percentage > 80 ? '#dc3545' : (percentage > 60 ? '#ffc107' : '#28a745');
+        const modeEl = document.getElementById('chat-mode-line');
+        if (modeEl) {
+            modeEl.onclick = async () => {
+                if (window.chatPrivacyMode?.toggleCurrentChatMode) {
+                    await window.chatPrivacyMode.toggleCurrentChatMode(this);
+                }
+            };
         }
     }
-    async calculateContextUsage() {
+    async calculateContextUsage(sessionId = null) {
         try {
-            const conversations = await window.electronAPI.getConversations();
-            if (!conversations || conversations.length === 0) {
-                this.updateContextUsage(null);
+            const activeSessionId = sessionId || this.activeTabId;
+            const tab = this.chatTabs.get(activeSessionId);
+            const usage = tab?.contextUsage || null;
+            if (!window.electronAPI.getContextUsageEstimate) {
+                if (usage && String(activeSessionId) === String(this.activeTabId)) this.updateContextUsage({ usage, context_length: usage.contextLength });
+                else if (String(activeSessionId) === String(this.activeTabId)) this.updateContextUsage(null);
                 return;
             }
-            // Estimate tokens: ~1.37 tokens per word
-            let totalTokens = 0;
-            conversations.forEach(conv => {
-                const words = conv.content.split(/\s+/).length;
-                totalTokens += Math.ceil(words * 1.37);
-            });
-            const contextLength = parseInt(await window.electronAPI.getSetting('context_window'), 10)
-                || 8192;
-            // Update display
-            this.updateContextUsage({
-                usage: {
-                    prompt_tokens: totalTokens,
-                    total_tokens: totalTokens
-                },
-                context_length: contextLength
-            });
-            console.log(`Context loaded: ${totalTokens}/${contextLength} tokens`);
+            const estimate = await window.electronAPI.getContextUsageEstimate(activeSessionId);
+            const tokens = Number(estimate?.tokens || estimate?.prompt_tokens || estimate?.total_tokens || 0);
+            if (estimate && Number.isFinite(tokens) && tokens > 0) {
+                if (tab) tab.contextUsage = estimate;
+                if (String(activeSessionId) === String(this.activeTabId)) this.updateContextUsage(estimate);
+                return;
+            }
+            if (String(activeSessionId) === String(this.activeTabId)) this.updateContextUsage(null);
         } catch (error) {
             console.error('Error calculating context:', error);
         }
     }
     showStoredContextUsage() {
-        if (this.lastContextUsage) {
-            this.updateContextUsage({ usage: this.lastContextUsage, context_length: this.lastContextUsage.contextLength });
-        }
+        const usage = this.chatTabs.get(this.activeTabId)?.contextUsage;
+        if (usage) this.updateContextUsage({ usage, context_length: usage.contextLength });
+        else this.updateContextUsage(null);
     }
     async clearCurrentChat() {
         return window.mainPanelTabs.clearCurrentChat(this);
@@ -710,7 +449,6 @@ class MainPanel {
     async saveOpenTabIds() {
         return window.mainPanelTabs.saveOpenTabIds(this);
     }
-    // Context preset mapping: slider index → token value
     static CONTEXT_PRESETS = [4096, 8192, 16384, 32768, 49152, 65536, 98304, 131072, 196608, 262144];
     static CONTEXT_LABELS = ['4K', '8K', '16K', '32K', '48K', '64K', '96K', '128K', '192K', '256K'];
     static getContextPresetIndex(value) {
@@ -748,7 +486,6 @@ class MainPanel {
         if (!section || !configurableControl || !readonlyControl || !contextSlider) {
             return;
         }
-
         if (!profile?.spec?.model) {
             this._apiContextProfile = null;
             section.style.display = 'none';
@@ -756,7 +493,6 @@ class MainPanel {
             readonlyControl.style.display = 'none';
             return;
         }
-
         this._apiContextProfile = profile;
         const contextCaps = profile.spec.capabilities?.contextWindow || {};
         const contextValue = contextCaps.configurable
@@ -764,16 +500,13 @@ class MainPanel {
             : (profile.runtimeConfig?.contextWindow?.value
                 || profile.spec.runtime?.contextWindow?.value)
             || 8192;
-
         if (!contextCaps.supported && !contextCaps.configurable) {
             section.style.display = 'none';
             configurableControl.style.display = 'none';
             readonlyControl.style.display = 'none';
             return;
         }
-
         section.style.display = 'block';
-
         if (contextCaps.configurable) {
             const bestIndex = MainPanel.getContextPresetIndex(contextValue);
             configurableControl.style.display = 'block';
@@ -783,109 +516,36 @@ class MainPanel {
             this.updateContextDisplay(bestIndex);
             return;
         }
-
         configurableControl.style.display = 'none';
         readonlyControl.style.display = 'block';
         readonlyControl.textContent = `Context Window: ${MainPanel.formatContextValue(contextValue)} (${Number(contextValue).toLocaleString()} tokens)`;
     }
     initContextSettings() {
-        const contextSlider = document.getElementById('context-slider');
-        const contextDisplay = document.getElementById('context-display');
-        if (!contextSlider || !contextDisplay) {
-            console.warn('Context slider elements not found');
-            return;
-        }
-        console.log('✓ Context slider found, initializing...');
-        this.loadSelectedContextSetting()
-            .then(contextValue => {
-                const bestIdx = MainPanel.getContextPresetIndex(contextValue);
-                contextSlider.value = bestIdx;
-                this.updateContextDisplay(bestIdx);
-                return window.electronAPI.llm.getConfig();
-            })
-            .then(config => {
-                if (config?.modelSpec && config?.runtimeConfig) {
-                    this.applyContextProfile({
-                        spec: config.modelSpec,
-                        runtimeConfig: config.runtimeConfig
-                    });
-                }
-            })
-            .catch(error => {
-                console.error('✗ Error loading context setting:', error);
-            });
-        this._initThinkingSettings();
+        return window.LocalAgentMainPanelContext?.initContextSettings?.(
+            this,
+            MainPanel.CONTEXT_PRESETS,
+            MainPanel.CONTEXT_LABELS,
+            MainPanel.getContextPresetIndex
+        );
     }
     async _initThinkingSettings() {
-        try {
-            const { mode, showThinking } = await window.electronAPI.llm.getThinkingMode();
-            // mode: 'off' | 'think' | 'nothink'
-            // We store visibility separately as show/min/hide
-            const thinkToggle = document.getElementById('thinking-toggle');
-            const visGroup = document.getElementById('thinking-visibility-group');
-            const visRadios = document.querySelectorAll('input[name="think-vis"]');
-            // Determine initial visibility setting
-            let savedVis;
-            try {
-                savedVis = await window.electronAPI.getSettingValue('llm.thinkingVisibility');
-            } catch (e) { }
-            this._thinkingVisibility = savedVis || (showThinking ? 'show' : 'hide');
-            // Set toggle state
-            if (thinkToggle) {
-                thinkToggle.checked = mode === 'think';
-            }
-            // Show/hide visibility group based on toggle
-            if (visGroup) {
-                visGroup.style.display = (mode === 'think') ? 'flex' : 'none';
-            }
-            // Set the right radio
-            visRadios.forEach(r => {
-                r.checked = r.value === this._thinkingVisibility;
-            });
-            // Bind toggle
-            if (thinkToggle) {
-                thinkToggle.addEventListener('change', async (e) => {
-                    const newMode = e.target.checked ? 'think' : 'off';
-                    await window.electronAPI.llm.setThinkingMode(newMode);
-                    if (visGroup) visGroup.style.display = e.target.checked ? 'flex' : 'none';
-                    this.showNotification(`Thinking: ${e.target.checked ? 'ON' : 'OFF'}`);
-                });
-            }
-            // Bind radio pills
-            visRadios.forEach(radio => {
-                radio.addEventListener('change', async (e) => {
-                    this._thinkingVisibility = e.target.value;
-                    await window.electronAPI.saveSetting('llm.thinkingVisibility', e.target.value);
-                    // Also update the showThinking flag for backward compat
-                    await window.electronAPI.llm.setShowThinking(e.target.value !== 'hide');
-                });
-            });
-        } catch (error) {
-            console.error('Failed to init thinking settings:', error);
-            this._thinkingVisibility = 'show';
-        }
+        return window.LocalAgentMainPanelContext?.initThinkingSettings?.(this);
     }
     async saveContextSize(index) {
-        try {
-            const value = MainPanel.CONTEXT_PRESETS[parseInt(index)] || 8192;
-            await window.electronAPI.setContextSetting(value);
-            this._selectedContextSetting = value;
-            if (this._apiContextProfile) {
-                this.applyContextProfile(this._apiContextProfile);
-            }
-            this.showNotification(`Context: ${MainPanel.CONTEXT_LABELS[parseInt(index)] || '8K'}`);
-        } catch (error) {
-            console.error('Save error:', error);
-            this.showNotification(`Save failed: ${error.message}`, 'error');
-        }
+        return window.LocalAgentMainPanelContext?.saveContextSize?.(
+            this,
+            MainPanel.CONTEXT_PRESETS,
+            MainPanel.CONTEXT_LABELS,
+            index
+        );
     }
     updateContextDisplay(index) {
-        const idx = parseInt(index);
-        const contextDisplay = document.getElementById('context-display');
-        if (!contextDisplay) return;
-        const tokens = MainPanel.CONTEXT_PRESETS[idx] || 8192;
-        const label = MainPanel.CONTEXT_LABELS[idx] || '8K';
-        contextDisplay.textContent = `${label} (${tokens.toLocaleString()} tokens)`;
+        return window.LocalAgentMainPanelContext?.updateContextDisplay?.(
+            this,
+            MainPanel.CONTEXT_PRESETS,
+            MainPanel.CONTEXT_LABELS,
+            index
+        );
     }
     async saveSystemPrompt() {
         const promptTextarea = document.getElementById('system-prompt');
@@ -900,62 +560,18 @@ class MainPanel {
         }
     }
     async addProxyServer() {
-        // Placeholder for proxy server addition
-        // This would typically open a modal or form
         this.showNotification('Proxy server functionality coming soon', 'info');
     }
     setupEventListeners() {
-        // Listen for conversation updates
-        window.electronAPI.onConversationUpdate((event, data) => {
-            // Don't reload on every update
-        });
-        window.electronAPI.onBackgroundEvent(async (event, bgEvent) => {
-            if (!bgEvent || !bgEvent.type || !bgEvent.payload) return;
-            const type = bgEvent.type;
-            const payload = bgEvent.payload || {};
-            const mode = String(payload.subagentMode || payload.subagent_mode || 'no_ui').toLowerCase();
-            if (!type.startsWith('subagent:')) return;
-            const childSessionId = payload.childSessionId || payload.child_session_id;
-            const hasExistingTab = childSessionId ? this.chatTabs.has(childSessionId) : false;
-            try {
-                if (type === 'subagent:queued' || type === 'subagent:started') {
-                    if (mode === 'ui' || hasExistingTab) {
-                        await this.ensureSubagentChat({ ...payload, __eventType: type }, { activate: false });
-                    }
-                } else if (type === 'subagent:completed' || type === 'subagent:failed') {
-                    await this.updateSubagentChatState({ ...payload, __eventType: type });
-                }
-            } catch (error) {
-                console.error('Failed to process subagent background event:', error);
-            }
-            try {
-                await this.refreshSubagentManagerTab();
-            } catch (error) {
-                console.error('Failed to refresh Subagent Manager tab:', error);
-            }
-        });
-        window.electronAPI.onAgentUpdate(async () => {
-            try {
-                await this.refreshSuperagentManagerTab();
-            } catch (error) {
-                console.error('Failed to refresh Superagent Manager tab:', error);
-            }
-        });
-        // Listen for tool permission requests
-        window.electronAPI.onToolPermissionRequest((event, request) => {
-            this.showToolPermissionDialog(request);
-        });
+        return window.LocalAgentMainPanelEvents?.setupEventListeners?.(this);
     }
     async initializeSession() {
-        // Tab system handles initialization now via restoreOpenTabs()
-        // This is kept for backward compatibility
     }
     async loadConversations() {
         if (this.activeTabId) {
             await this.loadTabConversations(this.activeTabId);
         }
     }
-    // All rule-related methods have been moved to rule-manager.js
     showToolPermissionDialog(request) {
         return window.mainPanelPermissions.showToolPermissionDialog(this, request);
     }
@@ -982,15 +598,17 @@ class MainPanel {
     }
 }
 document.addEventListener('DOMContentLoaded', async () => {
-    window.mainPanel = new MainPanel();
+    const panel = new MainPanel();
+    window.localAgentRendererShell?.initializeMainPanel?.(panel);
+    window.mainPanel = panel;
     if (typeof window.initializeApiProviderSettings === 'function') {
         try {
-            await window.initializeApiProviderSettings(window.mainPanel);
+            await window.initializeApiProviderSettings(panel);
         } catch (error) {
             console.error('Failed to initialize API provider settings module:', error);
         }
     } else {
         console.warn('API provider settings module not loaded');
     }
-    await window.mainPanel.initializeSession();
+    await panel.initializeSession();
 });

@@ -1,12 +1,18 @@
 {
   "name": "localagent-desktop",
-  "version": "0.0.1-alpha.1",
-  "description": "Standalone desktop AI agent with calendar integration and MCP tooling",
+  "version": "0.1.0-beta.1",
+  "private": true,
+  "description": "Local-first AI workspace with superagent orchestration, plugins, companions, and Docker runtime",
   "main": "src/main/main.js",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "start": "electron .",
+    "start:cli": "electron . --cli",
+    "start:companion-qr": "electron . --companion-qr",
     "start:test:external": "electron . --external-test --windowless --external-port 8788",
-    "start:test:nowindow": "node src/main/main.js --test --nowindow",
+    "start:test:nowindow": "node src/main/main.js --skintest --nowindow",
     "dev": "concurrently \"npm run start\" \"npm run watch\"",
     "build": "electron-builder",
     "watch": "nodemon --watch src --ext js,html,css --exec \"npm start\"",
@@ -26,7 +32,11 @@
     "test:searxng-e2e": "electron tools/test-searxng-e2e-electron.js",
     "test:tts-fast-qwen-smoke": "node tools/test-tts-plugin-fast-qwen-smoke.js",
     "test:tts-piper-smoke": "node tools/test-tts-plugin-piper-smoke.js",
+    "test:telegram-smoke": "node tools/test-telegram-plugin-smoke.js",
     "test:rag-superagent": "node tools/test-rag-superagent-flow.js",
+    "test:android-audio-transport": "node tests/external/android-audio-transport.external-test.js",
+    "test:stt-ipc-routing": "node tests/external/stt-ipc-routing.external-test.js",
+    "test:a2a-external": "node tests/external/a2a-windowless.external-test.js",
     "test:subagent-external": "node tests/external/subagent-dual-mode.external-test.js",
     "test:subagent-live-search": "node tests/external/subagent-live-search.external-test.js",
     "test:subagent-live-time": "node tests/external/subagent-live-time.external-test.js",
@@ -34,7 +44,10 @@
     "test:live": "node tests/run-suite.js live",
     "test:core": "node tests/run-suite.js core",
     "test:all": "node tests/run-suite.js all",
-    "verify": "node tests/run-suite.js core"
+    "verify": "node tests/run-suite.js core",
+    "start:www-gate": "electron packages/www-gate/src/index.js",
+    "test:www-gate": "electron tools/test-www-gate-smoke.js",
+    "pack:wellbot": "npm pack --workspace wellbot --dry-run --json"
   },
   "keywords": [
     "electron",
@@ -53,16 +66,18 @@
     "nodemon": "^3.0.1"
   },
   "dependencies": {
+    "@xenova/transformers": "^2.17.2",
     "axios": "^1.6.0",
     "better-sqlite3": "^9.0.1",
     "lru-cache": "^7.18.3",
     "node-fetch": "^2.7.0",
-    "node-telegram-bot-api": "^0.66.0"
+    "node-telegram-bot-api": "^0.66.0",
+    "telegram": "^2.26.22"
   },
   "build": {
     "appId": "com.localagent.desktop",
     "productName": "LocalAgent Desktop",
-    "artifactName": "LocalAgent-0.0.0.1a-${arch}.${ext}",
+    "artifactName": "LocalAgent-${version}-${arch}.${ext}",
     "npmRebuild": false,
     "directories": {
       "output": "dist"
@@ -73,10 +88,44 @@
     ],
     "extraFiles": [
       {
+        "from": "data/whisper-cache",
+        "to": "data/whisper-cache",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
         "from": "agentin",
         "to": "agentin",
         "filter": [
-          "**/*"
+          "agent.md",
+          "prompts/**/*",
+          "agents/**/*",
+          "skills/**/*",
+          "knowledge/**/*",
+          "plugins/**/*",
+          "connectors/**/*",
+          "workflows/**/*",
+          "ui/**/*",
+          "a2a/targets/**/*",
+          "!agents/sub/*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*/**/*",
+          "!a2a/tasks/**/*",
+          "!a2a/events/**/*",
+          "!memory/**/*",
+          "!subtasks/**/*",
+          "!tasks/**/*",
+          "!userabout/**/*",
+          "!workspaces/**/*",
+          "!knowledge/library/**/*",
+          "!knowledge/staging/**/*",
+          "!**/__pycache__/**/*",
+          "!**/*.pyc",
+          "!**/*.pyo",
+          "!**/node_modules/**/*",
+          "!**/*.log",
+          "!**/*.err.log",
+          "!**/*.out.log",
+          "!**/.DS_Store"
         ]
       }
     ],
@@ -89,3 +138,5 @@
     ]
   }
 }
+
+

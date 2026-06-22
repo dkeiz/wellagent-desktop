@@ -10,6 +10,8 @@ The goal is to catch seam breakage before large modules are split:
 - MCP registry regressions
 - knowledge safety regressions
 - file-size budget regressions
+- packaged update regressions in paths, versions, and migrations
+- provider CLI invocation safety regressions
 
 ## Suites
 - `npm run test:contracts`
@@ -30,6 +32,10 @@ The goal is to catch seam breakage before large modules are split:
   External-test windowless workflow for a real `no_ui` subagent internet search using a live Ollama model and real web tools, with parent-delivery verification.
 - `npm run test:subagent-live-time`
   External-test windowless workflow for a real `no_ui` subagent tool call using `current_time`, with child-session and parent-delivery verification.
+- `npm run test:stt-ipc-routing`
+  External-test windowless workflow for real built-in desktop STT. Sends a real spoken fixture through desktop IPC and authenticated companion HTTP, then asserts recognized transcript text.
+- `npm run test:android-audio-transport`
+  Live Android AVD audio transport probe. Starts desktop in mocked audio mode, installs the debug APK, opens the debug audio transport screen by deep link, and waits for logcat markers.
 - `npm run test:all`
   Core plus skin plus live.
 - `npm run verify`
@@ -64,6 +70,24 @@ Dedicated external tests:
 - `npm run test:subagent-external`
 - `npm run test:subagent-live-search`
 - `npm run test:subagent-live-time`
+- `npm run test:stt-ipc-routing`
+- `npm run test:android-audio-transport`
+
+### STT IPC Routing
+Use `npm run test:stt-ipc-routing` to prove real built-in desktop STT recognition and Android-facing wiring. The suite starts Electron in external-test mode, clears `stt.defaultPluginId`, sends a real spoken fixture through `stt:transcribe-audio`, then pairs with Companion and sends the same bytes through `POST /companion/stt/transcribe`.
+
+The test must not pass on transport alone. It requires a spoken fixture and expected transcript text:
+
+```powershell
+$env:LOCALAGENT_STT_IPC_FIXTURE="C:\path\to\spoken.wav"
+$env:LOCALAGENT_STT_IPC_EXPECT_TRANSCRIPT="expected words"
+npm run test:stt-ipc-routing
+```
+
+If either route cannot start or reach built-in desktop STT, the test must fail before Android APK rebuild is treated as valid.
+
+### Android Audio Transport
+Use contract tests for fast protocol drift checks, `npm run test:android-audio-transport` for AVD proof through the real app client, and manual stage validation when checking a visible desktop build. The Android probe opens an `Audio Transport Test` screen, uses generated WAV bytes for STT, and plays mocked desktop WAV audio for TTS, so it does not need a real microphone or real TTS model.
 
 It exposes a localhost control API:
 - `GET /health`

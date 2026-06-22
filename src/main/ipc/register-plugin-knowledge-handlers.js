@@ -2,6 +2,10 @@ const { quickSetupPlugin } = require('../plugin-setup-service');
 
 function registerPluginKnowledgeHandlers(ipcMain, runtime) {
   const { container, windowManager } = runtime;
+  const getFromRuntime = (key) => runtime?.[key] || container?.optional?.(key) || null;
+  const getPluginManager = () => getFromRuntime('pluginManager');
+  const getRuntimePaths = () => getFromRuntime('runtimePaths');
+  const getKnowledgeManager = () => getFromRuntime('knowledgeManager');
   const notifyPluginStateChanged = (pluginId, source) => {
     if (!windowManager) return;
     windowManager.send('plugins:state-changed', {
@@ -12,13 +16,13 @@ function registerPluginKnowledgeHandlers(ipcMain, runtime) {
   };
 
   ipcMain.handle('plugins:list', async () => {
-    const pm = container.optional('pluginManager');
+    const pm = getPluginManager();
     if (!pm) return [];
     return pm.listPlugins();
   });
 
-  ipcMain.handle('plugins:scan', async () => {
-    const pm = container.optional('pluginManager');
+  ipcMain.handle('plugins:scan', async (event, options = {}) => {
+    const pm = getPluginManager();
     if (!pm) return { success: false, error: 'Plugin system not ready' };
     try {
       const result = pm.rescanPlugins
@@ -30,8 +34,8 @@ function registerPluginKnowledgeHandlers(ipcMain, runtime) {
     }
   });
 
-  ipcMain.handle('plugins:enable', async (event, pluginId) => {
-    const pm = container.optional('pluginManager');
+  ipcMain.handle('plugins:enable', async (event, pluginId, options = {}) => {
+    const pm = getPluginManager();
     if (!pm) return { success: false, error: 'Plugin system not ready' };
     try {
       await pm.enablePlugin(pluginId);
@@ -42,8 +46,8 @@ function registerPluginKnowledgeHandlers(ipcMain, runtime) {
     }
   });
 
-  ipcMain.handle('plugins:disable', async (event, pluginId) => {
-    const pm = container.optional('pluginManager');
+  ipcMain.handle('plugins:disable', async (event, pluginId, options = {}) => {
+    const pm = getPluginManager();
     if (!pm) return { success: false, error: 'Plugin system not ready' };
     try {
       await pm.disablePlugin(pluginId);
@@ -54,14 +58,26 @@ function registerPluginKnowledgeHandlers(ipcMain, runtime) {
     }
   });
 
+  ipcMain.handle('plugins:set-sidebar-visible', async (event, pluginId, visible, options = {}) => {
+    const pm = getPluginManager();
+    if (!pm) return { success: false, error: 'Plugin system not ready' };
+    try {
+      const result = pm.setPluginSidebarVisible(pluginId, visible === true);
+      notifyPluginStateChanged(pluginId, 'sidebar-visible');
+      return { success: true, ...result };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
   ipcMain.handle('plugins:get-config', async (event, pluginId) => {
-    const pm = container.optional('pluginManager');
+    const pm = getPluginManager();
     if (!pm) return {};
     return pm.getPluginConfig(pluginId);
   });
 
-  ipcMain.handle('plugins:set-config', async (event, pluginId, key, value) => {
-    const pm = container.optional('pluginManager');
+  ipcMain.handle('plugins:set-config', async (event, pluginId, key, value, options = {}) => {
+    const pm = getPluginManager();
     if (!pm) return { success: false, error: 'Plugin system not ready' };
     try {
       await pm.setPluginConfig(pluginId, key, value);
@@ -73,13 +89,23 @@ function registerPluginKnowledgeHandlers(ipcMain, runtime) {
   });
 
   ipcMain.handle('plugins:inspect', async (event, pluginId) => {
-    const pm = container.optional('pluginManager');
+    const pm = getPluginManager();
     if (!pm) return null;
     return pm.getPluginDetail(pluginId);
   });
 
-  ipcMain.handle('plugins:run-action', async (event, pluginId, action, params) => {
-    const pm = container.optional('pluginManager');
+  ipcMain.handle('plugins:get-setup-ui', async (event, pluginId) => {
+    const pm = getPluginManager();
+    if (!pm?.getPluginSetupUI) return null;
+    try {
+      return await pm.getPluginSetupUI(pluginId);
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('plugins:run-action', async (event, pluginId, action, params, options = {}) => {
+    const pm = getPluginManager();
     if (!pm) return { success: false, error: 'Plugin system not ready' };
     try {
       const result = await pm.runPluginAction(pluginId, action, params || {});
@@ -100,9 +126,9 @@ function registerPluginKnowledgeHandlers(ipcMain, runtime) {
     }
   });
 
-  ipcMain.handle('plugins:quick-setup', async (event, pluginName) => {
-    const pm = container.optional('pluginManager');
-    const paths = container.optional('runtimePaths');
+  ipcMain.handle('plugins:quick-setup', async (event, pluginName, options = {}) => {
+    const pm = getPluginManager();
+    const paths = getRuntimePaths();
     if (!pm || !paths?.pluginsDir) {
       return { success: false, error: 'Plugin system not ready' };
     }
@@ -122,20 +148,40 @@ function registerPluginKnowledgeHandlers(ipcMain, runtime) {
     }
   });
 
+  ipcMain.handle('plugins:get-sidebar-widgets', async () => {
+    const pm = getPluginManager();
+    if (!pm || !pm.getSidebarWidgets) return [];
+    return pm.getSidebarWidgets();
+  });
+
+  ipcMain.handle('plugins:run-sidebar-widget-action', async (event, widgetId, action, params = {}) => {
+    const pm = getPluginManager();
+    if (!pm?.runSidebarWidgetAction) {
+      return { success: false, error: 'Plugin sidebar widget actions are unavailable' };
+    }
+    try {
+      const result = await pm.runSidebarWidgetAction(widgetId, action, params || {});
+      notifyPluginStateChanged(String(widgetId || ''), `sidebar:${action}`);
+      return { success: true, result };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
   ipcMain.handle('knowledge:list', async (event, options) => {
-    const km = container.optional('knowledgeManager');
+    const km = getKnowledgeManager();
     if (!km) return [];
     return km.listItems(options || {});
   });
 
   ipcMain.handle('knowledge:stats', async () => {
-    const km = container.optional('knowledgeManager');
+    const km = getKnowledgeManager();
     if (!km) return { total: 0, active: 0, staged: 0 };
     return km.getStats();
   });
 
-  ipcMain.handle('knowledge:confirm', async (event, slug) => {
-    const km = container.optional('knowledgeManager');
+  ipcMain.handle('knowledge:confirm', async (event, slug, options = {}) => {
+    const km = getKnowledgeManager();
     if (!km) return { success: false, error: 'Knowledge system not ready' };
     try {
       await km.promoteStaged(slug);
@@ -145,8 +191,8 @@ function registerPluginKnowledgeHandlers(ipcMain, runtime) {
     }
   });
 
-  ipcMain.handle('knowledge:reject', async (event, slug) => {
-    const km = container.optional('knowledgeManager');
+  ipcMain.handle('knowledge:reject', async (event, slug, options = {}) => {
+    const km = getKnowledgeManager();
     if (!km) return { success: false, error: 'Knowledge system not ready' };
     try {
       await km.rejectStaged(slug);
@@ -157,7 +203,7 @@ function registerPluginKnowledgeHandlers(ipcMain, runtime) {
   });
 
   ipcMain.handle('knowledge:tree', async () => {
-    const km = container.optional('knowledgeManager');
+    const km = getKnowledgeManager();
     if (!km) return { library: [], staging: [], stats: {} };
     return km.getKnowledgeTree();
   });

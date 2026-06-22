@@ -131,7 +131,7 @@ class WorkflowStepExecutor {
       try {
         const stepResult = step.type === 'agent'
           ? await this._executeAgentStep(step, workflow, state, options)
-          : await this._executeToolStep(step, paramOverrides, state);
+          : await this._executeToolStep(step, workflow, paramOverrides, state, options);
 
         results.push(stepResult);
         state.steps[step.id] = stepResult;
@@ -169,7 +169,7 @@ class WorkflowStepExecutor {
     };
   }
 
-  async _executeToolStep(step, paramOverrides, state) {
+  async _executeToolStep(step, workflow, paramOverrides, state, options = {}) {
     const toolName = String(step.tool || '').trim();
     if (!toolName) throw new Error(`Workflow step "${step.id}" is missing tool`);
 
@@ -185,7 +185,14 @@ class WorkflowStepExecutor {
     }
     params = { ...(params || {}), ...(paramOverrides[toolName] || {}), ...(paramOverrides[step.id] || {}) };
 
-    const result = await this.mcpServer.executeTool(toolName, params);
+    const result = await this.mcpServer.executeTool(toolName, params, null, {
+      context: {
+        source: 'workflow',
+        workflowId: workflow.id,
+        workflowRunId: options.workflowRunId || null,
+        sessionId: options.requestedBySessionId || null
+      }
+    });
     if (result && result.needsPermission) {
       const error = new Error('Permission required');
       error.needsPermission = true;

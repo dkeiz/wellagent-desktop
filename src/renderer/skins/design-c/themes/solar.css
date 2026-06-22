@@ -1,1 +1,20 @@
-html[data-active-skin=\"design-c\"][data-theme=\"solar\"] { --skin-theme-id: solar; }
+html[data-active-skin="design-c"][data-theme="solar"] {
+  --skin-theme-id: solar;
+  --main-bg: #251a11;
+  --sidebar-bg: #2f2116;
+  --chat-bg: #2a1d13;
+  --card-bg: #332418;
+  --bg-secondary: #3a291b;
+  --bg-tertiary: #452f1f;
+  --text-primary: #ffe8d2;
+  --text-secondary: #e9c29a;
+  --text-muted: #c59a72;
+  --text-color: #ffe8d2;
+  --border-color: #7a563a;
+  --hover-bg: #4a3322;
+  --active-bg: #5a3d29;
+  --primary-color: #f08c3a;
+  --user-msg-bg: #f08c3a;
+  --user-msg-text: #2d1d10;
+  --input-bg: #312216;
+}

@@ -44,30 +44,60 @@ class CalendarWidget {
         this.calendarDock = document.getElementById('calendar-dock');
         this.calendarDockDate = document.getElementById('calendar-dock-date');
         this.calendarFlyout = document.getElementById('calendar-flyout');
+        this.statusbarCalendarDock = document.getElementById('status-bar-calendar');
+        this.statusbarCalendarDockDate = document.getElementById('status-bar-date');
 
-        if (!this.calendarDock || !this.calendarFlyout) {
+        if (!this.calendarFlyout) {
             return;
         }
 
-        this.calendarDock.addEventListener('click', () => {
-            if (this.isFlyoutOpen) {
-                this.closeFlyout();
-                return;
-            }
-            this.openFlyout();
-        });
+        if (this.calendarFlyout.parentElement !== document.body) {
+            document.body.appendChild(this.calendarFlyout);
+        }
 
-        this.calendarDock.addEventListener('keydown', (event) => {
-            if (event.key !== 'Enter' && event.key !== ' ') {
-                return;
-            }
-            event.preventDefault();
-            if (this.isFlyoutOpen) {
-                this.closeFlyout();
-                return;
-            }
-            this.openFlyout();
-        });
+        if (this.calendarDock) {
+            this.calendarDock.addEventListener('click', () => {
+                if (this.isFlyoutOpen && this.activeDock === this.calendarDock) {
+                    this.closeFlyout();
+                    return;
+                }
+                this.openFlyout(this.calendarDock, false);
+            });
+
+            this.calendarDock.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') {
+                    return;
+                }
+                event.preventDefault();
+                if (this.isFlyoutOpen && this.activeDock === this.calendarDock) {
+                    this.closeFlyout();
+                    return;
+                }
+                this.openFlyout(this.calendarDock, false);
+            });
+        }
+
+        if (this.statusbarCalendarDock) {
+            this.statusbarCalendarDock.addEventListener('click', () => {
+                if (this.isFlyoutOpen && this.activeDock === this.statusbarCalendarDock) {
+                    this.closeFlyout();
+                    return;
+                }
+                this.openFlyout(this.statusbarCalendarDock, true);
+            });
+
+            this.statusbarCalendarDock.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') {
+                    return;
+                }
+                event.preventDefault();
+                if (this.isFlyoutOpen && this.activeDock === this.statusbarCalendarDock) {
+                    this.closeFlyout();
+                    return;
+                }
+                this.openFlyout(this.statusbarCalendarDock, true);
+            });
+        }
 
         const keepOpen = () => this.bumpFlyoutTimer();
         this.calendarFlyout.addEventListener('mouseenter', keepOpen);
@@ -80,26 +110,74 @@ class CalendarWidget {
         window.addEventListener('blur', this.handleWindowBlur);
     }
 
-    openFlyout() {
-        if (!this.calendarDock || !this.calendarFlyout) {
+    openFlyout(dockEl = this.calendarDock, isStatusbar = false) {
+        if (!dockEl || !this.calendarFlyout) {
             return;
         }
         this.isFlyoutOpen = true;
+        this.activeDock = dockEl;
+        this.positionFlyout(dockEl, isStatusbar);
         this.calendarFlyout.classList.add('open');
         this.calendarFlyout.setAttribute('aria-hidden', 'false');
-        this.calendarDock.setAttribute('aria-expanded', 'true');
+        this.calendarDock?.setAttribute('aria-expanded', 'false');
+        this.statusbarCalendarDock?.setAttribute('aria-expanded', 'false');
+        dockEl.setAttribute('aria-expanded', 'true');
+
+        if (isStatusbar) {
+            this.calendarFlyout.classList.add('from-statusbar');
+        } else {
+            this.calendarFlyout.classList.remove('from-statusbar');
+        }
+
         this.bumpFlyoutTimer();
     }
 
+    positionFlyout(dockEl, isStatusbar = false) {
+        if (!dockEl || !this.calendarFlyout) {
+            return;
+        }
+
+        const rect = dockEl.getBoundingClientRect();
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+        const flyoutWidth = 280;
+        const horizontalMargin = 8;
+        const verticalGap = 8;
+
+        this.calendarFlyout.style.position = 'fixed';
+        this.calendarFlyout.style.width = `${flyoutWidth}px`;
+        this.calendarFlyout.style.left = 'auto';
+        this.calendarFlyout.style.right = 'auto';
+        this.calendarFlyout.style.top = 'auto';
+        this.calendarFlyout.style.bottom = 'auto';
+
+        let left = rect.left;
+        if (isStatusbar) {
+            left = rect.right - flyoutWidth;
+        }
+        left = Math.max(horizontalMargin, Math.min(left, viewportWidth - flyoutWidth - horizontalMargin));
+
+        const top = Math.max(horizontalMargin, rect.top - verticalGap);
+
+        this.calendarFlyout.style.left = `${left}px`;
+        this.calendarFlyout.style.bottom = `${Math.max(horizontalMargin, window.innerHeight - top)}px`;
+    }
+
     closeFlyout() {
-        if (!this.calendarDock || !this.calendarFlyout) {
+        if (!this.calendarFlyout) {
             return;
         }
         this.isFlyoutOpen = false;
         this.clearFlyoutTimer();
         this.calendarFlyout.classList.remove('open');
+        this.calendarFlyout.classList.remove('from-statusbar');
         this.calendarFlyout.setAttribute('aria-hidden', 'true');
-        this.calendarDock.setAttribute('aria-expanded', 'false');
+        if (this.activeDock) {
+            this.activeDock.setAttribute('aria-expanded', 'false');
+        } else {
+            this.calendarDock?.setAttribute('aria-expanded', 'false');
+            this.statusbarCalendarDock?.setAttribute('aria-expanded', 'false');
+        }
+        this.activeDock = null;
     }
 
     bumpFlyoutTimer() {
@@ -120,11 +198,13 @@ class CalendarWidget {
     }
 
     handleDocumentPointerDown(event) {
-        if (!this.isFlyoutOpen || !this.calendarFlyout || !this.calendarDock) {
+        if (!this.isFlyoutOpen || !this.calendarFlyout) {
             return;
         }
         const target = event.target;
-        if (this.calendarFlyout.contains(target) || this.calendarDock.contains(target)) {
+        if (this.calendarFlyout.contains(target) || 
+            (this.calendarDock && this.calendarDock.contains(target)) ||
+            (this.statusbarCalendarDock && this.statusbarCalendarDock.contains(target))) {
             this.bumpFlyoutTimer();
             return;
         }
@@ -134,8 +214,10 @@ class CalendarWidget {
     handleDocumentKeyDown(event) {
         if (event.key === 'Escape' && this.isFlyoutOpen) {
             this.closeFlyout();
-            if (this.calendarDock) {
-                this.calendarDock.focus();
+            if (this.activeDock) {
+                this.activeDock.focus();
+            } else {
+                this.calendarDock?.focus();
             }
         }
     }
@@ -147,15 +229,19 @@ class CalendarWidget {
     }
 
     updateDockDateLabel() {
-        if (!this.calendarDockDate) {
-            return;
-        }
         const now = new Date();
-        this.calendarDockDate.textContent = now.toLocaleDateString(undefined, {
+        const dateStr = now.toLocaleDateString(undefined, {
             month: 'short',
             day: 'numeric',
             year: 'numeric'
         });
+
+        if (this.calendarDockDate) {
+            this.calendarDockDate.textContent = dateStr;
+        }
+        if (this.statusbarCalendarDockDate) {
+            this.statusbarCalendarDockDate.textContent = dateStr;
+        }
     }
 
     async loadEvents() {

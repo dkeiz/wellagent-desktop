@@ -1,4 +1,5 @@
 const InferenceDispatcher = require('../../src/main/inference-dispatcher');
+const { InferenceScheduler } = require('../../src/main/inference/inference-scheduler');
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -181,5 +182,68 @@ module.exports = {
       })
     ]);
     assert.equal(maxActive, 2, 'Same provider should run in parallel when allowParallel is true');
+
+    {
+      const stopCalls = [];
+      const scheduler = new InferenceScheduler({
+        aiService: {
+          stopGeneration(provider = null) {
+            stopCalls.push(provider || 'default');
+            return true;
+          }
+        },
+        db: createDb(true)
+      });
+      let releaseBackground;
+      const backgroundRun = scheduler.runWithLockContext(
+        () => new Promise(resolve => { releaseBackground = resolve; }),
+        { mode: 'internal', preemptible: true, provider: 'openrouter' }
+      );
+      await sleep(0);
+      const stopped = scheduler.preemptBackgroundIfNeeded('chat', false);
+      assert.equal(stopped, true, 'Expected chat work to preempt active background inference');
+      assert.deepEqual(
+        stopCalls,
+        ['openrouter'],
+        'Expected preemption to stop the provider that owns the active preemptible request'
+      );
+      releaseBackground();
+      await backgroundRun;
+    }
+
+    {
+      const stopCalls = [];
+      const scheduler = new InferenceScheduler({
+        aiService: {
+          stopGeneration(provider = null) {
+            stopCalls.push(provider || 'default');
+            return true;
+          }
+        },
+        db: createDb(true)
+      });
+      let releaseBackground;
+      let releaseOther;
+      const backgroundRun = scheduler.runWithLockContext(
+        () => new Promise(resolve => { releaseBackground = resolve; }),
+        { mode: 'internal', preemptible: true, provider: 'openrouter' }
+      );
+      await sleep(0);
+      const otherRun = scheduler.runWithLockContext(
+        () => new Promise(resolve => { releaseOther = resolve; }),
+        { mode: 'connector', preemptible: false, provider: 'ollama' }
+      );
+      await sleep(0);
+      const stopped = scheduler.preemptBackgroundIfNeeded('chat', false);
+      assert.equal(stopped, true, 'Expected active background preemption to survive concurrent non-preemptible work');
+      assert.deepEqual(
+        stopCalls,
+        ['openrouter'],
+        'Expected concurrent non-preemptible work not to hide the preemptible provider'
+      );
+      releaseOther();
+      releaseBackground();
+      await Promise.all([backgroundRun, otherRun]);
+    }
   }
 };

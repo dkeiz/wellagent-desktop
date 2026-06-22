@@ -1,6 +1,21 @@
 {
   "defaultMaxLines": 1000,
-  "allowlist": {
-    "src/main/llm-model-specs.json": 1100
-  }
+  "softMaxLines": 850,
+  "roots": [
+    "src",
+    "tools",
+    "tests",
+    "packages",
+    "mobile",
+    "agentin/plugins"
+  ],
+  "exclude": [
+    "mobile/package-lock.json",
+    "mobile/node_modules/**",
+    "mobile/.expo/**",
+    "mobile/android/**",
+    "mobile/ios/**",
+    "agentin/plugins/**/node_modules/**"
+  ],
+  "allowlist": {}
 }

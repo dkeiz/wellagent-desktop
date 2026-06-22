@@ -17,9 +17,17 @@ module.exports = {
     };
     const deliveredMessages = [];
     const prompts = [];
+    const settings = new Map();
     let callCount = 0;
 
     const db = {
+      async getSetting(key) {
+        return settings.has(key) ? settings.get(key) : null;
+      },
+      async saveSetting(key, value) {
+        settings.set(key, value);
+        return true;
+      },
       async getAgents() {
         return [agent];
       },

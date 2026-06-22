@@ -21,7 +21,10 @@ async function ensureDefaults(context) {
     qwenModelsRoot: '',
     modelPathsJson: '{}',
     piperSourceDir: '',
-    piperVoiceId: DEFAULT_PIPER_VOICE_ID
+    piperVoiceId: DEFAULT_PIPER_VOICE_ID,
+    selectedProvider: 'fast-qwen',
+    selectedVoice: '',
+    voiceDescription: ''
   };
 
   for (const [key, value] of Object.entries(defaults)) {
@@ -86,6 +89,14 @@ async function ensureSelectedModel(context, params = {}) {
   return selection;
 }
 
+function resolveStyle(params = {}, config = {}, selection = {}) {
+  if (params?.style !== undefined) return String(params.style || '').trim() || null;
+  if (selection.provider === 'fast-qwen') {
+    return String(config.voiceDescription || '').trim() || null;
+  }
+  return null;
+}
+
 function normalizeAudioResult(result, selection) {
   const durationMs = Number(result.duration || 0) * 1000;
   return {
@@ -101,11 +112,13 @@ function normalizeAudioResult(result, selection) {
   };
 }
 
+
 async function speakAction(params, context) {
   const text = String(params?.text || '').trim();
   if (!text) {
     throw new Error('Text is required');
   }
+  const config = getPluginConfig(context);
   const selection = await ensureSelectedModel(context, params);
   const result = await requestBackendJson(RUNTIME, context, '/api/agent/speak', {
     method: 'POST',
@@ -113,7 +126,7 @@ async function speakAction(params, context) {
       text,
       voice: selection.backendVoice,
       language: 'auto',
-      style: String(params?.style || '').trim() || null,
+      style: resolveStyle(params, config, selection),
       include_base64: params?.includeBase64 !== false,
       output_format: 'wav',
       metadata: params?.metadata || null
@@ -165,6 +178,7 @@ async function getStreamPlanAction(params, context) {
   if (!text) {
     throw new Error('Text is required');
   }
+  const config = getPluginConfig(context);
   const selection = await ensureSelectedModel(context, params);
   return {
     ok: true,
@@ -180,11 +194,12 @@ async function getStreamPlanAction(params, context) {
       text,
       voice: selection.backendVoice,
       language: 'auto',
-      style: String(params?.style || '').trim() || null,
+      style: resolveStyle(params, config, selection),
       output_format: 'wav'
     }
   };
 }
+
 
 async function downloadModelAction(params, context) {
   const modelName = String(params?.modelName || params?.model_name || '').trim();
@@ -337,7 +352,7 @@ module.exports = {
     if (action === 'getVoicePrepareStatus') return getVoicePrepareStatusAction(params || {}, context);
     if (action === 'getStreamPlan') return getStreamPlanAction(params || {}, context);
     if (action === 'getPerformance') return getPerformanceAction(context);
-    throw new Error(`Unknown TTS action: ${action}`);
+    throw new Error(`Unknown plugin action: ${action}`);
   },
 
   _test: {

@@ -142,6 +142,7 @@ function buildContainer() {
         getSession: () => ({ autoMemory: false, idleSeconds: 0 })
       },
       connectorRuntime: { listConnectors: async () => [], startConnector: async () => ({}), stopConnector: async () => ({}), getLogs: () => [] },
+      sessionWorkspace: { getWorkspacePath: () => null, listFiles: () => [] },
       dispatcher: { dispatch: async () => ({ content: 'tc-ok', model: 'mock' }) },
       agentManager: { getAgents: async () => [], getAgent: async () => null, createAgent: async () => ({}), updateAgent: async () => ({}), deleteAgent: async () => ({}), activateAgent: async () => ({}), deactivateAgent: async () => {}, compactAgent: async () => {} },
       eventBus: { publish() {}, getLog: () => [] },

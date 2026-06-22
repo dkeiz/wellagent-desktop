@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const ResourceMonitor = require('./resource-monitor');
+const { buildRuntimePaths } = require('./runtime-paths');
 
 /**
  * BackgroundMemoryDaemon — Persistent background agent for memory housekeeping.
@@ -51,11 +52,13 @@ class BackgroundMemoryDaemon {
         this._resourceMonitor = options.resourceMonitor || new ResourceMonitor(this.RESOURCE_THRESHOLD);
 
         // Paths
-        this.basePath = options.basePath || path.join(__dirname, '../../agentin/agents/pro/background-daemon');
+        const runtimePaths = options.runtimePaths || buildRuntimePaths(options);
+        this.basePath = options.basePath || runtimePaths.backgroundDaemonBasePath;
         this.statePath = options.statePath || path.join(this.basePath, 'config', 'state.json');
         this.systemPromptPath = options.systemPromptPath || path.join(this.basePath, 'system.md');
-        this.userProfilePath = options.userProfilePath || path.join(__dirname, '../../agentin/userabout/memoryaboutuser.md');
+        this.userProfilePath = options.userProfilePath || runtimePaths.userProfilePath;
         this.taskQueueService = options.taskQueueService || null;
+        this.knowledgeManager = options.knowledgeManager || null;
 
         // Listen for chat activity events from EventBus
         if (this.eventBus) {
@@ -76,6 +79,9 @@ class BackgroundMemoryDaemon {
     }
 
     // ==================== Lifecycle ====================
+    setKnowledgeManager(knowledgeManager) {
+        this.knowledgeManager = knowledgeManager || null;
+    }
 
     /**
      * Start the daemon. Ensures folder structure, loads state, begins ticking.
@@ -410,6 +416,12 @@ After completing the task, end with a brief summary of what you did in the forma
                         summarized_at: new Date().toISOString()
                     }
                 });
+                if (this.db.markDaemonSessionInspected) {
+                    await this.db.markDaemonSessionInspected(job.session_id, {
+                        jobId: job.id,
+                        notes: summary.substring(0, 500)
+                    });
+                }
                 processed++;
             } catch (error) {
                 await this.db.failMemoryJob(job.id, error.message, {
@@ -573,6 +585,13 @@ ${transcript}`;
             } else if (taskName.includes('consolidat')) {
                 // Consolidated memories go to global
                 await this.agentMemory.append('global', `[Daemon: Daily Consolidation]\n${cleanContent}`, 'daily-consolidation.md');
+            } else if (taskName.includes('knowledge') && this.knowledgeManager?.ingestObservation) {
+                await this.knowledgeManager.ingestObservation({
+                    category: 'daemon-maintenance',
+                    content: cleanContent,
+                    source: 'memory-daemon',
+                    confidence: 0.6
+                });
             } else {
                 // General daemon notes
                 const compactPath = path.join(this.basePath, 'memory', 'compact.md');
@@ -619,13 +638,25 @@ ${transcript}`;
                        COUNT(c.id) as message_count
                 FROM chat_sessions cs
                 LEFT JOIN conversations c ON cs.id = c.session_id
+                LEFT JOIN daemon_session_inspections dsi ON CAST(cs.id AS TEXT) = CAST(dsi.session_id AS TEXT)
                 WHERE cs.agent_id IS NULL
+                  AND dsi.session_id IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM memory_jobs mj
+                      WHERE mj.job_type = 'summarize_session'
+                        AND CAST(mj.session_id AS TEXT) = CAST(cs.id AS TEXT)
+                        AND mj.status IN ('done', 'pending', 'running')
+                  )
                 GROUP BY cs.id
                 HAVING message_count >= 4
                 ORDER BY cs.last_message_at DESC
                 LIMIT 10
             `);
             lines.push(`**Recent Sessions:** ${recentSessions.length} with 4+ messages`);
+            if (this.db.getDaemonSessionInspectionStats) {
+                const inspectionStats = this.db.getDaemonSessionInspectionStats();
+                lines.push(`**Daemon Session Inspections:** ${inspectionStats.count || 0} inspected; last=${inspectionStats.lastInspectedAt || 'never'}`);
+            }
 
             const transcriptBlocks = [];
             for (const session of recentSessions.slice(0, 3)) {
@@ -765,11 +796,16 @@ You are the background memory daemon for the LocalAgent desktop app. You run aut
 2. **Update user persona** — Review recent conversations for new information about the user (preferences, habits, projects, goals). Add dated observations to the user profile.
 3. **Consolidate daily memories** — If today's memory is getting long/verbose, consolidate into key points.
 4. **Health check** — Note any anomalies (missing files, inconsistent data).
+5. **Maintain skills/knowledge lightly** — Prefer updating existing skills or knowledge items over creating duplicates. Keep skills short and procedural; put large factual/reference material into knowledge instead.
 
 ## Rules
 - Be concise. Summaries should be 3-5 bullet points max.
 - Preserve factual accuracy — don't infer or assume.
 - Date all entries.
+- Do not re-inspect sessions already marked by daemon summary jobs or inspection metadata.
+- When updating a skill, change only the smallest relevant section and add/update a short metadata line such as \`Updated: YYYY-MM-DD\` near the top if the file has metadata.
+- When updating knowledge, rely on \`meta.json\`/item metadata for \`updatedAt\`, source, tags, confidence, and status. Do not duplicate large raw chunks in skill files.
+- If new information is large, split it into focused knowledge items instead of expanding a skill.
 - If nothing needs doing, say [no work needed].
 - After completing a task, respond with [task: task_name] followed by the output.
 - You cannot ask the user questions — they may not be present.

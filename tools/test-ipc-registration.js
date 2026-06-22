@@ -173,6 +173,11 @@ function buildMockRuntime() {
       stopConnector: async () => ({}),
       getLogs: () => []
     },
+    sessionWorkspace: {
+      getWorkspacePath: () => null,
+      listFiles: () => [],
+      readFile: () => ({ success: false, error: 'No workspace in IPC registration test' })
+    },
     dispatcher: { dispatch: async () => ({ content: 'ok' }) },
     agentManager: {
       getAgents: async () => [],

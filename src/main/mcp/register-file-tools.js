@@ -3,12 +3,16 @@ const path = require('path');
 const { resolvePathTokens, tokenizePath } = require('../path-tokens');
 
 function getPathTokenOptions(server) {
-  const context = server.getCurrentAgentContext?.()
+  const baseContext = server.getCurrentAgentContext?.()
     || server.getCurrentExecutionContext?.()
     || {};
+  const sessionId = baseContext.sessionId ?? server.getCurrentSessionId?.() ?? null;
+  const context = sessionId ? { ...baseContext, sessionId } : baseContext;
   return {
     agentManager: server._agentManager || null,
     sessionWorkspace: server._sessionWorkspace || null,
+    executionDirectory: server._executionDirectory || null,
+    sessionId,
     context
   };
 }
@@ -23,6 +27,33 @@ async function resolveToolPath(server, rawPath) {
 
 async function toPortablePath(server, absolutePath) {
   return tokenizePath(absolutePath, getPathTokenOptions(server));
+}
+
+async function getAllowedWorkspaceRoot(server) {
+  if (!server._sessionWorkspace?.getWorkspacePath) {
+    return null;
+  }
+  const sessionId = server.getCurrentSessionId?.() || 'default';
+  return server._sessionWorkspace.getWorkspacePath(sessionId);
+}
+
+function getAllowedAgentinRoot(server) {
+  if (server._agentManager?.basePath) {
+    return path.dirname(server._agentManager.basePath);
+  }
+  if (server._sessionWorkspace?.basePath) {
+    return path.dirname(server._sessionWorkspace.basePath);
+  }
+  return null;
+}
+
+async function assertFilePathAllowed(server, filePath) {
+  await server.assertExecutionPathAllowed?.(filePath, {
+    extraRoots: [
+      await getAllowedWorkspaceRoot(server),
+      getAllowedAgentinRoot(server)
+    ].filter(Boolean)
+  });
 }
 
 function countOccurrences(content, search) {
@@ -41,8 +72,8 @@ function countOccurrences(content, search) {
 function registerFileTools(server) {
   server.registerTool('read_file', {
     name: 'read_file',
-    description: 'Read contents of a file',
-    userDescription: 'Reads and returns the contents of a text file',
+    description: 'Read contents of a text file. Do not use for media or large binary data; use partial parsing or dedicated tools to inspect metadata/content instead.',
+    userDescription: 'Reads and returns the contents of a text file. Do not use for images, audio, video, archives, or large files; use partial parsing or dedicated media tools to fetch metadata or inspect content instead.',
     example: 'TOOL:read_file{"path":"{agent_tasks}/plan.md"}',
     inputSchema: {
       type: 'object',
@@ -53,6 +84,7 @@ function registerFileTools(server) {
     }
   }, async (params) => {
     const filePath = await resolveToolPath(server, params.path);
+    await assertFilePathAllowed(server, filePath);
     const content = await fs.readFile(filePath, 'utf-8');
     return { path: await toPortablePath(server, filePath), requestedPath: params.path, content, size: content.length };
   });
@@ -73,14 +105,25 @@ function registerFileTools(server) {
     }
   }, async (params) => {
     const filePath = await resolveToolPath(server, params.path);
+    await assertFilePathAllowed(server, filePath);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     if (params.append) {
       await fs.appendFile(filePath, params.content, 'utf-8');
     } else {
       await fs.writeFile(filePath, params.content, 'utf-8');
     }
+    if (server._artifactRegistry) {
+      const sessionId = server.getCurrentSessionId?.() || 'default';
+      server._artifactRegistry.registerFile(sessionId, {
+        name: path.basename(filePath),
+        path: filePath,
+        source: params.append ? 'write_file:append' : 'write_file',
+        action: params.append ? 'edited' : 'created'
+      });
+    }
     return { path: await toPortablePath(server, filePath), requestedPath: params.path, written: params.content.length, append: params.append || false };
   });
+
 
   server.registerTool('edit_file', {
     name: 'edit_file',
@@ -104,6 +147,7 @@ function registerFileTools(server) {
     }
 
     const filePath = await resolveToolPath(server, params.path);
+    await assertFilePathAllowed(server, filePath);
     let content = await fs.readFile(filePath, 'utf-8');
     const applied = [];
     const skipped = [];
@@ -134,6 +178,15 @@ function registerFileTools(server) {
     }
 
     await fs.writeFile(filePath, content, 'utf-8');
+    if (server._artifactRegistry && applied.length > 0) {
+      const sessionId = server.getCurrentSessionId?.() || 'default';
+      server._artifactRegistry.registerFile(sessionId, {
+        name: path.basename(filePath),
+        path: filePath,
+        source: 'edit_file',
+        action: 'edited'
+      });
+    }
     return {
       path: await toPortablePath(server, filePath),
       requestedPath: params.path,
@@ -144,6 +197,7 @@ function registerFileTools(server) {
       newSize: content.length
     };
   });
+
 
   server.registerTool('list_directory', {
     name: 'list_directory',
@@ -159,6 +213,7 @@ function registerFileTools(server) {
     }
   }, async (params) => {
     const dirPath = await resolveToolPath(server, params.path);
+    await assertFilePathAllowed(server, dirPath);
     const items = await fs.readdir(dirPath, { withFileTypes: true });
     return Promise.all(items.map(async (item) => ({
       name: item.name,
@@ -181,6 +236,7 @@ function registerFileTools(server) {
     }
   }, async (params) => {
     const filePath = await resolveToolPath(server, params.path);
+    await assertFilePathAllowed(server, filePath);
     try {
       const stat = await fs.stat(filePath);
       return {
@@ -210,7 +266,17 @@ function registerFileTools(server) {
     }
   }, async (params) => {
     const filePath = await resolveToolPath(server, params.path);
+    await assertFilePathAllowed(server, filePath);
     await fs.unlink(filePath);
+    if (server._artifactRegistry) {
+      const sessionId = server.getCurrentSessionId?.() || 'default';
+      server._artifactRegistry.registerFile(sessionId, {
+        name: path.basename(filePath),
+        path: filePath,
+        source: 'delete_file',
+        action: 'deleted'
+      });
+    }
     return { deleted: true, path: await toPortablePath(server, filePath), requestedPath: params.path };
   });
 }

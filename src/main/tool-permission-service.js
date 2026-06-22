@@ -1,9 +1,26 @@
 const PROFILE_GROUP_FIELDS = {
     unsafe: 'unsafe_enabled',
     web: 'web_enabled',
-    terminal: 'terminal_enabled',
     ports: 'ports_enabled',
     visual: 'visual_enabled'
+};
+const TERMINAL_MODES = new Set(['off', 'workspace', 'system']);
+const AGENT_PRESETS = {
+    developer: {
+        id: 'developer',
+        label: 'Developer',
+        profile: {
+            main_enabled: true,
+            preset_id: 'developer',
+            files_mode: 'full',
+            terminal_mode: 'workspace',
+            unsafe_enabled: true,
+            web_enabled: true,
+            terminal_enabled: true,
+            ports_enabled: true,
+            visual_enabled: true
+        }
+    }
 };
 
 class ToolPermissionService {
@@ -33,6 +50,7 @@ class ToolPermissionService {
         const groups = { ...global.groups };
 
         groups.files = String(profileRow?.files_mode || global.groups.files || 'read');
+        groups.terminal = this._normalizeTerminalMode(profileRow?.terminal_mode, profileRow?.terminal_enabled);
         for (const [groupId, field] of Object.entries(PROFILE_GROUP_FIELDS)) {
             if (profileRow && Object.prototype.hasOwnProperty.call(profileRow, field)) {
                 groups[groupId] = profileRow[field] === 1;
@@ -53,12 +71,17 @@ class ToolPermissionService {
 
         const toolNames = this._getAllKnownTools();
         for (const toolName of toolNames) {
+            if (!await this._isToolVisibleForAgent(toolName, resolvedAgentId)) {
+                output.toolStates[toolName] = false;
+                continue;
+            }
             const active = await this._resolveToolActiveForAgent({
                 toolName,
                 agentToolStates,
                 groups,
                 mainEnabled: output.mainEnabled,
-                global
+                global,
+                profileRow
             });
             output.toolStates[toolName] = active;
             if (active) output.activeToolNames.push(toolName);
@@ -88,6 +111,11 @@ class ToolPermissionService {
             runGrant.safeTools.forEach(toolName => output.add(toolName));
         }
         return Array.from(output);
+    }
+
+    async getTerminalMode(context = {}) {
+        const resolved = await this.resolveContext(context);
+        return this._normalizeTerminalMode(resolved.groups?.terminal);
     }
 
     setRunScopedGrant(runId, agentId, contract = {}) {
@@ -125,10 +153,12 @@ class ToolPermissionService {
         const global = await this._buildGlobalContext();
         const profile = {
             main_enabled: global.mainEnabled,
+            preset_id: '',
             files_mode: global.groups.files || 'read',
+            terminal_mode: this._normalizeTerminalMode(global.groups.terminal),
             unsafe_enabled: global.groups.unsafe === true,
             web_enabled: global.groups.web === true,
-            terminal_enabled: global.groups.terminal === true,
+            terminal_enabled: this._normalizeTerminalMode(global.groups.terminal) !== 'off',
             ports_enabled: global.groups.ports === true,
             visual_enabled: global.groups.visual === true
         };
@@ -151,47 +181,88 @@ class ToolPermissionService {
     async getAgentProfile(agentId) {
         await this.ensureAgentProfile(agentId);
         const profile = this.store.getAgentProfile(agentId);
-        const toolStates = this.store.getAgentToolStates(agentId);
-        return { profile, toolStates };
+        const resolved = await this.resolveContext({ agentId });
+        return {
+            profile,
+            toolStates: resolved.toolStates,
+            activePresetId: String(profile?.preset_id || '').trim()
+        };
     }
 
     async setAgentGroup(agentId, groupId, value) {
         await this.ensureAgentProfile(agentId);
         const row = this.store.getAgentProfile(agentId) || {};
-        const next = {
-            main_enabled: row.main_enabled === 1,
-            files_mode: row.files_mode || 'read',
-            unsafe_enabled: row.unsafe_enabled === 1,
-            web_enabled: row.web_enabled === 1,
-            terminal_enabled: row.terminal_enabled === 1,
-            ports_enabled: row.ports_enabled === 1,
-            visual_enabled: row.visual_enabled === 1
-        };
+        const next = this._cloneProfileRow(row);
 
         if (groupId === 'main') {
             next.main_enabled = Boolean(value);
         } else if (groupId === 'files') {
             const filesMode = ['off', 'read', 'full'].includes(String(value)) ? String(value) : 'read';
             next.files_mode = filesMode;
+        } else if (groupId === 'terminal') {
+            const terminalMode = this._normalizeTerminalMode(value);
+            next.terminal_mode = terminalMode;
+            next.terminal_enabled = terminalMode !== 'off';
         } else if (PROFILE_GROUP_FIELDS[groupId]) {
             next[PROFILE_GROUP_FIELDS[groupId]] = Boolean(value);
         } else {
             throw new Error(`Unsupported groupId "${groupId}"`);
         }
 
+        if (!this._hasProfileChanged(this._cloneProfileRow(row), next)) {
+            return this.getAgentProfile(agentId);
+        }
+        if (String(row.preset_id || '').trim()) {
+            next.preset_id = '';
+        }
         this.store.setAgentProfile(agentId, next);
         return this.getAgentProfile(agentId);
     }
 
     async setAgentTool(agentId, toolName, active) {
         await this.ensureAgentProfile(agentId);
-        this.store.setAgentToolState(agentId, toolName, Boolean(active));
-        return { success: true, agentId, toolName, active: Boolean(active) };
+        const normalizedTool = String(toolName || '').trim();
+        const row = this.store.getAgentProfile(agentId) || {};
+        const rawToolStates = this.store.getAgentToolStates(agentId);
+        const resolved = await this.resolveContext({ agentId });
+        const requested = Boolean(active);
+        const hasExplicitState = Object.prototype.hasOwnProperty.call(rawToolStates, normalizedTool);
+
+        if (!String(row.preset_id || '').trim() && hasExplicitState && rawToolStates[normalizedTool] === requested) {
+            return { success: true, agentId, toolName: normalizedTool, active: Boolean(active) };
+        }
+        if (
+            String(row.preset_id || '').trim()
+            && !hasExplicitState
+            && resolved.toolStates[normalizedTool] === requested
+        ) {
+            return { success: true, agentId, toolName: normalizedTool, active: requested };
+        }
+
+        if (String(row.preset_id || '').trim()) {
+            this.store.setAgentProfile(agentId, {
+                ...this._cloneProfileRow(row),
+                preset_id: ''
+            });
+        }
+        this.store.setAgentToolState(agentId, normalizedTool, requested);
+        return { success: true, agentId, toolName: normalizedTool, active: requested };
     }
 
     async resetAgentProfile(agentId) {
         this.store.deleteAgentProfile(agentId);
         await this.ensureAgentProfile(agentId);
+        return this.getAgentProfile(agentId);
+    }
+
+    async applyAgentPreset(agentId, presetId) {
+        await this.ensureAgentProfile(agentId);
+        const preset = AGENT_PRESETS[String(presetId || '').trim().toLowerCase()];
+        if (!preset) {
+            throw new Error(`Unsupported preset "${presetId}"`);
+        }
+        this.store.setAgentProfile(agentId, { ...preset.profile });
+        this.store.clearAgentToolStates(agentId);
         return this.getAgentProfile(agentId);
     }
 
@@ -209,14 +280,13 @@ class ToolPermissionService {
         for (const agentId of ids) {
             const row = this.store.getAgentProfile(agentId);
             if (!row) continue;
+            if (String(row.preset_id || '').trim() === 'developer') {
+                continue;
+            }
             this.store.setAgentProfile(agentId, {
-                main_enabled: row.main_enabled === 1,
-                files_mode: row.files_mode || 'read',
+                ...this._cloneProfileRow(row),
                 unsafe_enabled: unsafeEnabled,
-                web_enabled: row.web_enabled === 1,
-                terminal_enabled: row.terminal_enabled === 1,
-                ports_enabled: row.ports_enabled === 1,
-                visual_enabled: row.visual_enabled === 1
+                preset_id: ''
             });
 
             unsafeTools.forEach(toolName => {
@@ -236,6 +306,14 @@ class ToolPermissionService {
             ? this.agentManager._getSafeFolderName(agent.name)
             : String(agent.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
         return scopes.includes(String(slug || '').trim().toLowerCase());
+    }
+
+    async _isToolVisibleForAgent(toolName, agentId = null) {
+        const def = this.mcpServer?.tools?.get(toolName)?.definition;
+        const scopes = Array.isArray(def?.agentScopeSlugs) ? def.agentScopeSlugs : [];
+        if (scopes.length === 0) return true;
+        if (!agentId) return false;
+        return this._isToolScopedToAgent(toolName, agentId);
     }
 
     _coerceToolList(list) {
@@ -284,36 +362,47 @@ class ToolPermissionService {
             const modeTools = new Set(modes[String(filesMode || 'read')] || []);
             return modeTools.has(toolName);
         }
+        if (groupId === 'terminal') {
+            return this._normalizeTerminalMode(filesMode) !== 'off';
+        }
         return true;
     }
 
-    async _resolveToolActiveForAgent({ toolName, agentToolStates, groups, mainEnabled, global }) {
+    async _resolveToolActiveForAgent({ toolName, agentToolStates, groups, mainEnabled, global, profileRow = null }) {
         if (!mainEnabled) return false;
 
         const groupId = this.capabilityManager?.getGroupForTool?.(toolName) || null;
         if (groupId) {
             const groupValue = groups[groupId];
-            if (groupId !== 'files' && groupValue !== true) return false;
-            if (!this._isGroupAllowedForTool(groupId, toolName, groups.files)) return false;
+            if (groupId !== 'files' && groupId !== 'terminal' && groupValue !== true) return false;
+            const modeValue = groupId === 'terminal' ? groups.terminal : groups.files;
+            if (!this._isGroupAllowedForTool(groupId, toolName, modeValue)) return false;
         }
 
         if (Object.prototype.hasOwnProperty.call(agentToolStates, toolName)) {
             return agentToolStates[toolName] === true;
         }
 
+        if (String(profileRow?.preset_id || '').trim() === 'developer') {
+            return true;
+        }
+
         if (this._isUnsafeTool(toolName)) {
             return global.toolStates[toolName] === true;
         }
 
-        return false;
+        // Inherit the global resolved state for normal tools when the agent has
+        // no explicit override. This keeps older agent profiles from silently
+        // losing newly added safe tools such as display_content.
+        return global.toolStates[toolName] === true;
     }
 
     async _buildGlobalContext() {
         const groups = {};
         const groupsConfig = this.capabilityManager?.getGroupsConfig?.() || [];
         groupsConfig.forEach(group => {
-            groups[group.id] = group.id === 'files'
-                ? (group.mode || 'read')
+            groups[group.id] = group.id === 'files' || group.id === 'terminal'
+                ? (group.mode || (group.id === 'terminal' ? 'workspace' : 'read'))
                 : group.enabled === true;
         });
 
@@ -322,8 +411,15 @@ class ToolPermissionService {
         const activeToolNames = [];
         const toolNames = this._getAllKnownTools();
         for (const toolName of toolNames) {
+            if (!await this._isToolVisibleForAgent(toolName, null)) {
+                toolStates[toolName] = false;
+                continue;
+            }
             const active = await this.mcpServer.getToolActiveState(toolName);
-            toolStates[toolName] = mainEnabled && active;
+            const capabilityAllowed = this.capabilityManager?.isToolActive
+                ? this.capabilityManager.isToolActive(toolName)
+                : true;
+            toolStates[toolName] = mainEnabled && active && capabilityAllowed;
             if (toolStates[toolName]) activeToolNames.push(toolName);
         }
 
@@ -350,6 +446,40 @@ class ToolPermissionService {
         }
         const row = this.db.get('SELECT agent_id FROM chat_sessions WHERE id = ?', [sessionId]);
         return row?.agent_id ? Number(row.agent_id) : null;
+    }
+
+    _cloneProfileRow(row = {}) {
+        return {
+            main_enabled: row.main_enabled === 1 || row.main_enabled === true,
+            preset_id: String(row.preset_id || '').trim(),
+            files_mode: row.files_mode || 'read',
+            terminal_mode: this._normalizeTerminalMode(row.terminal_mode, row.terminal_enabled),
+            unsafe_enabled: row.unsafe_enabled === 1 || row.unsafe_enabled === true,
+            web_enabled: row.web_enabled === 1 || row.web_enabled === true,
+            terminal_enabled: this._normalizeTerminalMode(row.terminal_mode, row.terminal_enabled) !== 'off',
+            ports_enabled: row.ports_enabled === 1 || row.ports_enabled === true,
+            visual_enabled: row.visual_enabled === 1 || row.visual_enabled === true
+        };
+    }
+
+    _hasProfileChanged(current = {}, next = {}) {
+        return [
+            'main_enabled',
+            'preset_id',
+            'files_mode',
+            'terminal_mode',
+            'unsafe_enabled',
+            'web_enabled',
+            'terminal_enabled',
+            'ports_enabled',
+            'visual_enabled'
+        ].some((key) => current[key] !== next[key]);
+    }
+
+    _normalizeTerminalMode(value, legacyEnabled = true) {
+        const normalized = String(value || '').trim().toLowerCase();
+        if (TERMINAL_MODES.has(normalized)) return normalized;
+        return legacyEnabled === 0 || legacyEnabled === false ? 'off' : 'workspace';
     }
 }
 

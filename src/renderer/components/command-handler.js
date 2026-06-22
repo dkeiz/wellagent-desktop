@@ -116,6 +116,26 @@ class CommandHandler {
                 return { output: '🆕 New chat created.', style: 'system' };
             }
         });
+        this.commands.set('/private', {
+            description: 'Toggle current chat between memory/private mode',
+            execute: async () => {
+                if (!window.chatPrivacyMode?.toggleCurrentChatMode) {
+                    return { output: 'Private mode toggle is unavailable in this build.', style: 'system' };
+                }
+                await window.chatPrivacyMode.toggleCurrentChatMode(this.mainPanel);
+                return { output: 'Chat mode toggled.', style: 'system' };
+            }
+        });
+        this.commands.set('/newprivate', {
+            description: 'Open a brand-new private chat tab',
+            execute: async () => {
+                if (!window.mainPanelTabs?.newPrivateChat) {
+                    return { output: 'Private chat is unavailable in this build.', style: 'system' };
+                }
+                await window.mainPanelTabs.newPrivateChat(this.mainPanel);
+                return { output: 'New private chat created.', style: 'system' };
+            }
+        });
 
         this.commands.set('/refresh', {
             description: 'Reload the current UI window',
@@ -213,7 +233,7 @@ class CommandHandler {
                 try {
                     const conversations = await window.electronAPI.getConversations(10000);
                     const sessions = await window.electronAPI.getChatSessions(null, 1000);
-                    const usage = this.mainPanel.lastContextUsage;
+                    const usage = this.mainPanel.chatTabs.get(this.mainPanel.activeTabId)?.contextUsage || null;
 
                     const lines = ['📊 **Stats:**'];
                     lines.push(`  Sessions:     ${sessions?.length || 0}`);
@@ -501,19 +521,48 @@ class CommandHandler {
                         command,
                         output_to_file: false
                     });
+                    const commandResult = result?.result?.result || result?.result || result;
 
                     const lines = [`$ ${command}`];
-                    if (result.stdout) lines.push(result.stdout);
-                    if (result.stderr) lines.push(`stderr: ${result.stderr}`);
-                    if (result.output_mode === 'file') {
-                        lines.push(`Output saved to: ${result.file_path}`);
-                        if (result.summary) lines.push(result.summary);
+                    if (commandResult.stdout) lines.push(commandResult.stdout);
+                    if (commandResult.stderr) lines.push(`stderr: ${commandResult.stderr}`);
+                    if (commandResult.output_mode === 'file') {
+                        lines.push(`Output saved to: ${commandResult.file_path}`);
+                        if (commandResult.summary) lines.push(commandResult.summary);
                     }
-                    lines.push(`Exit code: ${result.exitCode || 0}`);
+                    lines.push(`Exit code: ${commandResult.exitCode || 0}`);
 
                     return { output: lines.join('\n'), style: 'terminal' };
                 } catch (e) {
                     return { output: `Terminal error: ${e.message}`, style: 'terminal' };
+                }
+            }
+        });
+
+        this.commands.set('/daemon', {
+            description: 'Open chat with the Background Daemon agent',
+            execute: async () => {
+                try {
+                    const agents = await window.electronAPI.agents.list();
+                    let daemon = (agents || []).find(agent => String(agent.name || '').toLowerCase() === 'background daemon');
+                    if (daemon?.type === 'pro') {
+                        daemon = await window.electronAPI.agents.update(daemon.id, { type: 'daemon' });
+                    }
+                    if (!daemon) daemon = await window.electronAPI.agents.create({
+                        name: 'Background Daemon',
+                        type: 'daemon',
+                        icon: '🧠',
+                        description: 'Chats with the background memory daemon persona and maintenance rules',
+                        system_prompt: 'You are the Background Memory Daemon in interactive chat mode. Inspect daemon state, memory jobs, knowledge, and skills. Be sharp and slim; update existing knowledge/skills before creating duplicates.'
+                    });
+                    const result = await window.electronAPI.agents.activate(daemon.id);
+                    if (result?.sessionId && window.app?.mainPanel?.openAgentChat) {
+                        await window.app.mainPanel.openAgentChat(daemon.id, result.sessionId, result.agent || daemon);
+                        return { output: 'Opened Background Daemon chat.', style: 'system' };
+                    }
+                    return { output: 'Unable to open Background Daemon chat.', style: 'system' };
+                } catch (e) {
+                    return { output: `Daemon chat error: ${e.message}`, style: 'system' };
                 }
             }
         });

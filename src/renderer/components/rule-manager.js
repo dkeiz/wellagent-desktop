@@ -31,7 +31,6 @@ class RuleManager {
             if (!container) return;
             
             container.innerHTML = '';
-            container.style.cssText = 'max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 0.25rem; background: #fafafa;';
             
             if (rules.length === 0) {
                 container.innerHTML = '<p class="no-rules">No custom rules yet. Add one to get started!</p>';
@@ -42,21 +41,20 @@ class RuleManager {
                 const ruleEl = document.createElement('div');
                 ruleEl.className = 'prompt-rule-item';
                 ruleEl.dataset.rule = JSON.stringify(rule);
-                ruleEl.style.cssText = 'background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 0.25rem 0.5rem; margin-bottom: 0.25rem;';
 
                 ruleEl.innerHTML = `
-                    <div class="rule-header" style="display: flex; align-items: center; gap: 0.5rem;">
-                        <input type="checkbox" class="rule-toggle" data-id="${rule.id}" ${rule.active ? 'checked' : ''} style="width: 16px; height: 16px; cursor: pointer;">
-                        <div class="rule-name-container" style="flex: 1;">
-                            <span class="rule-name" style="font-weight: 600; font-size: 0.9rem;">${rule.name}</span>
+                    <div class="rule-header">
+                        <input type="checkbox" class="rule-toggle" data-id="${rule.id}" ${rule.active ? 'checked' : ''}>
+                        <div class="rule-name-container">
+                            <span class="rule-name">${rule.name}</span>
                         </div>
-                        <div class="rule-actions" style="display: flex; gap: 0.25rem;">
-                            <button class="icon-btn edit-rule" title="Edit rule" style="background: #f0f0f0; border: 1px solid #ccc; cursor: pointer; padding: 0.2rem 0.4rem; font-size: 0.85rem; border-radius: 3px;">✏️</button>
-                            <button class="icon-btn delete-rule" title="Delete rule" style="background: #f0f0f0; border: 1px solid #ccc; cursor: pointer; padding: 0.2rem 0.4rem; font-size: 0.85rem; border-radius: 3px;">🗑️</button>
+                        <div class="rule-actions">
+                            <button class="icon-btn edit-rule" title="Edit rule">✏️</button>
+                            <button class="icon-btn delete-rule" title="Delete rule">🗑️</button>
                         </div>
                     </div>
-                    <div class="rule-content-container" style="margin-top: 0.25rem; padding-left: 1.5rem;">
-                        <div class="rule-content" style="color: #666; font-size: 0.85rem; line-height: 1.3;">${rule.content}</div>
+                    <div class="rule-content-container">
+                        <div class="rule-content">${rule.content}</div>
                     </div>
                 `;
                 
@@ -137,9 +135,7 @@ class RuleManager {
                 </form>
             </div>
         `;
-        
-        this.applyModalStyles(modal);
-        
+
         modal.querySelector('form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const formData = new FormData(e.target);
@@ -158,21 +154,6 @@ class RuleManager {
         
         modal.querySelector('.cancel-btn').addEventListener('click', () => modal.remove());
         document.body.appendChild(modal);
-    }
-
-    applyModalStyles(modal) {
-        modal.style.cssText = `
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background-color: rgba(0, 0, 0, 0.6); display: flex;
-            align-items: center; justify-content: center; z-index: 1000;
-        `;
-        
-        modal.querySelector('.modal-content').style.cssText = `
-            background: var(--background-color-light); color: var(--text-color);
-            padding: 2rem; border-radius: 8px;
-            width: 500px; max-width: 90%;
-            border: 1px solid var(--border-color);
-        `;
     }
 
     async toggleRule(id, active) {

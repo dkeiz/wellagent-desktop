@@ -2,6 +2,10 @@ const { Worker } = require('worker_threads');
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
+const { normalizeConnectorName } = require('./connector-name-policy');
+const { buildRuntimePaths } = require('./runtime-paths');
+const { SECRET_SETTING_REDACTION, isSecretSettingKey } = require('./settings-security');
+const { isPathInside, resolveBoundaryPath } = require('./path-boundary');
 
 /**
  * ConnectorRuntime - Manages dynamic connector scripts in worker threads
@@ -20,7 +24,7 @@ class ConnectorRuntime extends EventEmitter {
         this.eventBus = options.eventBus || null;
         this.externalChannelBridge = options.externalChannelBridge || null;
         this.connectors = new Map(); // name -> { worker, config, status, meta, logs }
-        this.connectorsDir = options.connectorsDir || path.join(__dirname, '../../agentin/connectors');
+        this.connectorsDir = options.connectorsDir || buildRuntimePaths(options).connectorsDir;
         this.workerPath = path.join(__dirname, 'connector-worker.js');
         this.maxLogs = 100;
 
@@ -73,17 +77,15 @@ class ConnectorRuntime extends EventEmitter {
      * Start a connector by filename (without .js extension)
      */
     async startConnector(name) {
+        name = normalizeConnectorName(name);
         if (this.connectors.has(name) && this.connectors.get(name).status === 'running') {
             throw new Error(`Connector "${name}" is already running`);
         }
 
-        const scriptPath = path.join(this.connectorsDir, `${name}.js`);
-        if (!fs.existsSync(scriptPath)) {
-            throw new Error(`Connector script not found: ${scriptPath}`);
-        }
+        const scriptPath = this._resolveConnectorScriptPath(name);
 
         // Load config from DB
-        const config = await this._loadConfig(name);
+        const config = await this._loadConfig(name, { includeSecrets: true });
 
         console.log(`[ConnectorRuntime] Starting connector "${name}"...`);
 
@@ -192,6 +194,7 @@ class ConnectorRuntime extends EventEmitter {
      * Stop a running connector
      */
     async stopConnector(name) {
+        name = normalizeConnectorName(name);
         const connector = this.connectors.get(name);
         if (!connector || connector.status !== 'running') {
             throw new Error(`Connector "${name}" is not running`);
@@ -240,33 +243,69 @@ class ConnectorRuntime extends EventEmitter {
 
     // ==================== Config Management ====================
 
-    async _loadConfig(name) {
+    _credentialName(name, key) {
+        return `connector.${name}.${String(key || '').trim()}`;
+    }
+
+    _resolveConnectorScriptPath(name) {
+        const scriptPath = path.join(this.connectorsDir, `${normalizeConnectorName(name)}.js`);
+        if (!fs.existsSync(scriptPath)) {
+            throw new Error(`Connector script not found: ${scriptPath}`);
+        }
+        const realConnectorsDir = resolveBoundaryPath(this.connectorsDir);
+        const realScriptPath = resolveBoundaryPath(scriptPath);
+        if (!isPathInside(realConnectorsDir, realScriptPath)) {
+            throw new Error(`Connector script must stay inside connectors directory: ${name}`);
+        }
+        return realScriptPath;
+    }
+
+    async _loadConfig(name, options = {}) {
+        name = normalizeConnectorName(name);
         const config = {};
         const prefix = `connector.${name}.`;
         const settings = await this.db.getAllSettings();
         for (const [key, value] of Object.entries(settings)) {
             if (key.startsWith(prefix)) {
-                config[key.slice(prefix.length)] = value;
+                const configKey = key.slice(prefix.length);
+                if (isSecretSettingKey(configKey)) {
+                    const secret = this.db.getCredential
+                        ? await this.db.getCredential(this._credentialName(name, configKey))
+                        : value;
+                    config[configKey] = options.includeSecrets === true
+                        ? (secret || value || '')
+                        : (secret || value ? SECRET_SETTING_REDACTION : '');
+                } else {
+                    config[configKey] = value;
+                }
             }
         }
         return config;
     }
 
     async setConfig(name, key, value) {
+        name = normalizeConnectorName(name);
         const settingKey = `connector.${name}.${key}`;
-        await this.db.saveSetting(settingKey, value);
+        const normalizedValue = value == null ? '' : String(value);
+        if (isSecretSettingKey(key) && this.db.setCredential) {
+            await this.db.setCredential(this._credentialName(name, key), normalizedValue);
+            await this.db.saveSetting(settingKey, normalizedValue ? SECRET_SETTING_REDACTION : '');
+        } else {
+            await this.db.saveSetting(settingKey, normalizedValue);
+        }
 
         // Update running connector's config
         const connector = this.connectors.get(name);
         if (connector) {
-            connector.config[key] = value;
+            connector.config[key] = normalizedValue;
         }
 
         return { success: true, name, key };
     }
 
-    async getConfig(name) {
-        return await this._loadConfig(name);
+    async getConfig(name, options = {}) {
+        name = normalizeConnectorName(name);
+        return await this._loadConfig(name, options);
     }
 
     // ==================== Logging ====================
@@ -290,6 +329,7 @@ class ConnectorRuntime extends EventEmitter {
     }
 
     getLogs(name, limit = 50) {
+        name = normalizeConnectorName(name);
         const connector = this.connectors.get(name);
         if (!connector) return [];
         return connector.logs.slice(-limit);

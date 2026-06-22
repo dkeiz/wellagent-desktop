@@ -25,6 +25,8 @@ I'm Well, your Universal RAG Agent with tool-enabled capabilities for research, 
 - Build multi-tool workflows
 - Manage todos and calendar
 - Create connectors (Telegram, APIs)
+- Expose LocalAgent over A2A on localhost
+- Call external interop targets such as Codex, LM Studio, and ComfyUI
 
 ### 5. Memory and Persistence
 - Auto-save conversation summaries
@@ -55,6 +57,8 @@ I'm Well, your Universal RAG Agent with tool-enabled capabilities for research, 
 - What is the weather in Tokyo
 - Show me my RAG status
 - List my active workflows
+- Show A2A status
+- List my interop targets
 
 ## Pro Tips
 - Organize datasets by topic (docs, notes, emails)
@@ -68,6 +72,7 @@ I'm Well, your Universal RAG Agent with tool-enabled capabilities for research, 
 - Web: search_web_bing, fetch_url
 - Files: read_file, list_directory, run_command
 - Automation: workflow_op, todo_op, calendar_op
+- Interop: a2a_op
 - Memory: automemory, search_conversations
 - Delegation: subagent
 

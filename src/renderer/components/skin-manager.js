@@ -22,7 +22,6 @@ class SkinManager {
         this.themePreferences = {};
         this.silentMode = false;
     }
-
     async initialize() {
         this.bindElements();
         if (!this.elements.root) return;
@@ -34,7 +33,6 @@ class SkinManager {
         await this.applySelectedSkin();
         this.render();
     }
-
     bindElements() {
         this.elements = {
             section: (typeof document.querySelector === 'function')
@@ -52,7 +50,6 @@ class SkinManager {
             legacyThemePicker: document.getElementById('theme-picker')
         };
     }
-
     async loadConfigFiles() {
         try {
             const [manifestRes, contractRes] = await Promise.all([
@@ -66,7 +63,6 @@ class SkinManager {
             console.error('[SkinManager] Failed to load skin configs', error);
         }
     }
-
     applyStoredOrderPreference() {
         const order = this.readStoredJson(this.storage.skinOrder, []);
         if (!Array.isArray(order) || order.length === 0) {
@@ -74,7 +70,6 @@ class SkinManager {
         }
         const skins = Array.isArray(this.config.skins) ? this.config.skins.slice() : [];
         if (skins.length === 0) return;
-
         const map = new Map(skins.map((skin) => [skin.id, skin]));
         const ordered = [];
         for (const skinId of order) {
@@ -89,7 +84,6 @@ class SkinManager {
         }
         this.config.skins = ordered;
     }
-
     loadState() {
         this.state.enabled = this.readStoredBoolean(this.storage.enabled, false);
         this.state.skinId = localStorage.getItem(this.storage.activeSkin) || this.config.defaultSkinId || 'default';
@@ -97,14 +91,20 @@ class SkinManager {
         if (this.elements.enabled) {
             this.elements.enabled.checked = this.state.enabled;
         }
+        this.persistCompanionUiState();
     }
 
+    persistCompanionUiState() {
+        const theme = this.getTheme();
+        const skinTheme = this.themePreferences?.[this.state.skinId] || theme;
+        const saveOps = [window.electronAPI?.saveSetting?.('ui.skin.enabled', String(this.state.enabled)), window.electronAPI?.saveSetting?.('ui.skin.id', this.state.skinId || 'default'), window.electronAPI?.saveSetting?.('ui.skin.theme', skinTheme), window.electronAPI?.saveSetting?.('ui.theme', theme)].filter(Boolean);
+        Promise.allSettled(saveOps).finally(() => { Promise.resolve(window.electronAPI?.companion?.notifyStateChanged?.('ui', { keys: ['ui.skin.enabled', 'ui.skin.id', 'ui.skin.theme', 'ui.theme'] })).catch(() => {}); });
+    }
     readStoredBoolean(key, fallback = false) {
         const value = localStorage.getItem(key);
         if (value === null) return fallback;
         return value === 'true';
     }
-
     readStoredJson(key, fallback) {
         try {
             const raw = localStorage.getItem(key);
@@ -114,28 +114,25 @@ class SkinManager {
             return fallback;
         }
     }
-
     shouldShowAutoTestButton() {
         const forcedVisible = this.readStoredBoolean('skinDevTools', false);
         const argv = typeof process !== 'undefined' && Array.isArray(process.argv) ? process.argv : [];
-        return forcedVisible || argv.includes('--test') || argv.includes('--testclient');
+        return forcedVisible || argv.includes('--skintest') || argv.includes('--testclient');
     }
-
     syncDevControlsVisibility() {
         if (!this.elements.runAutoTest) return;
         this.elements.runAutoTest.hidden = !this.shouldShowAutoTestButton();
     }
-
     bindEvents() {
         if (this.elements.enabled) {
             this.elements.enabled.addEventListener('change', async (e) => {
                 this.state.enabled = e.target.checked;
                 localStorage.setItem(this.storage.enabled, String(this.state.enabled));
+                this.persistCompanionUiState();
                 await this.applySelectedSkin();
                 this.render();
             });
         }
-
         if (this.elements.root) {
             this.elements.root.addEventListener('click', async (e) => {
                 const card = e.target.closest('.skin-card');
@@ -156,11 +153,11 @@ class SkinManager {
                 const skinId = card.dataset.skinId;
                 this.state.skinId = skinId;
                 localStorage.setItem(this.storage.activeSkin, skinId);
+                this.persistCompanionUiState();
                 this.setStatus(`Applying "${card.dataset.skinName}"...`, 'info');
                 await this.applySelectedSkin();
                 this.render();
             });
-
             this.elements.root.addEventListener('dragstart', (e) => {
                 const card = e.target.closest('.skin-card');
                 if (!card) return;
@@ -172,7 +169,6 @@ class SkinManager {
                     e.dataTransfer.setData('text/plain', this.state.draggingSkinId || '');
                 }
             });
-
             this.elements.root.addEventListener('dragover', (e) => {
                 const target = e.target.closest('.skin-card');
                 if (!target || !this.state.draggingSkinId) return;
@@ -180,14 +176,12 @@ class SkinManager {
                 this.elements.root.querySelectorAll('.skin-card.drag-over').forEach((node) => node.classList.remove('drag-over'));
                 target.classList.add('drag-over');
             });
-
             this.elements.root.addEventListener('dragleave', (e) => {
                 const card = e.target.closest('.skin-card');
                 if (card) {
                     card.classList.remove('drag-over');
                 }
             });
-
             this.elements.root.addEventListener('drop', async (e) => {
                 const target = e.target.closest('.skin-card');
                 const sourceId = this.state.draggingSkinId;
@@ -197,12 +191,10 @@ class SkinManager {
                 this.clearDragClasses();
                 await this.reorderSkins(sourceId, targetId);
             });
-
             this.elements.root.addEventListener('dragend', () => {
                 this.clearDragClasses();
             });
         }
-
         if (this.elements.section) {
             this.elements.section.addEventListener('dragenter', (e) => {
                 if (!this.hasFilePayload(e)) return;
@@ -210,19 +202,16 @@ class SkinManager {
                 this.elements.section.classList.add('skin-drop-active');
                 this.setStatus('Drop skin folder here to import.', 'info');
             });
-
             this.elements.section.addEventListener('dragover', (e) => {
                 if (!this.hasFilePayload(e)) return;
                 e.preventDefault();
             });
-
             this.elements.section.addEventListener('dragleave', (e) => {
                 if (!this.elements.section) return;
                 if (e.target === this.elements.section) {
                     this.elements.section.classList.remove('skin-drop-active');
                 }
             });
-
             this.elements.section.addEventListener('drop', async (e) => {
                 if (!this.hasFilePayload(e)) return;
                 e.preventDefault();
@@ -230,19 +219,16 @@ class SkinManager {
                 await this.handleDroppedSkin(e);
             });
         }
-
         if (this.elements.addBtn) {
             this.elements.addBtn.addEventListener('click', async () => {
                 await this.handleAddSkin();
             });
         }
-
         if (this.elements.removeBtn) {
             this.elements.removeBtn.addEventListener('click', async () => {
                 await this.handleRemoveSkin();
             });
         }
-
         if (this.elements.themes) {
             this.elements.themes.addEventListener('click', (e) => {
                 const btn = e.target.closest('.skin-theme-pill');
@@ -250,7 +236,6 @@ class SkinManager {
                 this.setTheme(btn.dataset.themeId);
             });
         }
-
         if (this.elements.runDiagnostics) {
             this.elements.runDiagnostics.addEventListener('click', () => {
                 const report = this.runDiagnostics();
@@ -259,7 +244,6 @@ class SkinManager {
                 this.elements.diagnosticsOutput.textContent = JSON.stringify(report, null, 2);
             });
         }
-
         if (this.elements.runAutoTest) {
             this.elements.runAutoTest.addEventListener('click', async () => {
                 const result = await this.runAutoTest();
@@ -269,23 +253,22 @@ class SkinManager {
             });
         }
     }
-
     observeThemeChanges() {
         if (this.themeObserver) return;
-        this.themeObserver = new MutationObserver(async (mutations) => {
+        this.themeObserver = new MutationObserver((mutations) => {
             for (const mutation of mutations) {
                 if (mutation.attributeName === 'data-theme') {
-                    await this.onThemeChanged();
+                    this.onThemeChanged().catch((error) => { this.logDiagnostic('warn', `Theme observer apply failed: ${error.message}`); this.setStatus(`Theme apply issue: ${error.message}`, 'warn'); });
                 }
             }
         });
         this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     }
-
     async onThemeChanged() {
         const currentTheme = this.getTheme();
         document.documentElement.setAttribute('data-skin-theme-token', currentTheme);
         if (!this.state.enabled) return;
+        if (this.state.loading) { this.state.pendingApply = true; return; }
         const skin = this.getSkin(this.state.skinId);
         if (!skin || skin.id === 'default') return;
         const supported = skin.supportedThemes || [];
@@ -297,14 +280,11 @@ class SkinManager {
             }
             return;
         }
-        await this.loadThemeStylesheet(skin.id, currentTheme);
-        this.renderThemePills();
+        await this.loadThemeStylesheet(skin.id, currentTheme); this.renderThemePills();
     }
-
     getTheme() {
         return document.documentElement.getAttribute('data-theme') || localStorage.getItem('theme') || 'light';
     }
-
     setTheme(themeId) {
         document.documentElement.setAttribute('data-theme', themeId);
         document.documentElement.setAttribute('data-skin-theme-token', themeId);
@@ -313,16 +293,15 @@ class SkinManager {
             this.themePreferences[this.state.skinId] = themeId;
             localStorage.setItem(this.storage.skinThemes, JSON.stringify(this.themePreferences));
         }
+        this.persistCompanionUiState();
         document.querySelectorAll('.theme-btn').forEach((btn) => {
             btn.classList.toggle('active', btn.dataset.theme === themeId);
         });
         this.renderThemePills();
     }
-
     getSkin(id) {
         return (this.config.skins || []).find((skin) => skin.id === id);
     }
-
     clearDragClasses() {
         this.state.draggingSkinId = null;
         this.state.dragging = false;
@@ -331,7 +310,6 @@ class SkinManager {
             node.classList.remove('drag-over', 'dragging');
         });
     }
-
     async reorderSkins(sourceId, targetId) {
         if (!sourceId || !targetId || sourceId === targetId) {
             return;
@@ -348,7 +326,6 @@ class SkinManager {
         await this.persistSkinManifest('Skin order updated.');
         this.render();
     }
-
     async handleAddSkin() {
         if (typeof document === 'undefined') return;
         const input = document.createElement('input');
@@ -357,7 +334,6 @@ class SkinManager {
         input.setAttribute('directory', 'true');
         input.style.display = 'none';
         document.body.appendChild(input);
-
         input.addEventListener('change', async () => {
             try {
                 const files = Array.from(input.files || []);
@@ -375,10 +351,8 @@ class SkinManager {
                 input.remove();
             }
         }, { once: true });
-
         input.click();
     }
-
     async handleRemoveSkin() {
         const skin = this.getSkin(this.state.skinId);
         if (!skin) {
@@ -396,7 +370,6 @@ class SkinManager {
         }
         await this.removeSkinById(skin.id);
     }
-
     resolveSelectedFolderPath(files) {
         if (!files.length) return null;
         const first = files[0];
@@ -412,20 +385,17 @@ class SkinManager {
         const rootPart = relative.split('/')[0];
         return nodePath.join(nodePath.dirname(fullPath), rootPart);
     }
-
     hasFilePayload(event) {
         const types = event?.dataTransfer?.types;
         if (!types) return false;
         return Array.from(types).includes('Files');
     }
-
     resolveDropFolderPath(dataTransfer) {
         const nodeFs = this.getNodeFs();
         const nodePath = this.getNodePath();
         if (!nodeFs || !nodePath) return null;
         const files = Array.from(dataTransfer?.files || []);
         if (!files.length) return null;
-
         for (const file of files) {
             const rawPath = String(file.path || '').trim();
             if (!rawPath) continue;
@@ -439,27 +409,47 @@ class SkinManager {
         }
         return null;
     }
-
     getNodeFs() {
         return typeof require === 'function' ? require('fs') : null;
     }
-
     getNodePath() {
         return typeof require === 'function' ? require('path') : null;
     }
-
     getSkinsRootDir() {
+        const nodeFs = this.getNodeFs();
         const nodePath = this.getNodePath();
-        if (!nodePath) return null;
+        if (!nodePath || !nodeFs) return null;
+        const candidates = [];
         if (typeof __dirname === 'string' && __dirname) {
-            return nodePath.resolve(__dirname, '../skins');
+            // Runtime packaging can place this file in different folders.
+            candidates.push(nodePath.resolve(__dirname, '../skins'));
+            candidates.push(nodePath.resolve(__dirname, 'skins'));
         }
         if (typeof process !== 'undefined' && typeof process.cwd === 'function') {
-            return nodePath.resolve(process.cwd(), 'src', 'renderer', 'skins');
+            candidates.push(nodePath.resolve(process.cwd(), 'src', 'renderer', 'skins'));
+            candidates.push(nodePath.resolve(process.cwd(), 'src', 'skins'));
         }
-        return null;
+        for (const dir of candidates) {
+            try {
+                if (!nodeFs.existsSync(dir)) continue;
+                const manifestPath = nodePath.join(dir, 'manifest.json');
+                const contractPath = nodePath.join(dir, 'contract.json');
+                if (nodeFs.existsSync(manifestPath) || nodeFs.existsSync(contractPath)) {
+                    return dir;
+                }
+            } catch (_) {
+                // Keep probing.
+            }
+        }
+        for (const dir of candidates) {
+            try {
+                if (nodeFs.existsSync(dir)) return dir;
+            } catch (_) {
+                // Keep probing.
+            }
+        }
+        return candidates[0] || null;
     }
-
     toSkinTitle(id) {
         return String(id || '')
             .split('-')
@@ -467,7 +457,6 @@ class SkinManager {
             .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
             .join(' ') || 'Imported Skin';
     }
-
     slugifySkinId(value) {
         return String(value || '')
             .toLowerCase()
@@ -475,7 +464,6 @@ class SkinManager {
             .replace(/^-+|-+$/g, '')
             .slice(0, 60) || `skin-${Date.now()}`;
     }
-
     ensureUniqueSkinId(baseId) {
         const existing = new Set((this.config.skins || []).map((skin) => skin.id));
         if (!existing.has(baseId)) return baseId;
@@ -483,7 +471,6 @@ class SkinManager {
         while (existing.has(`${baseId}-${index}`)) index++;
         return `${baseId}-${index}`;
     }
-
     detectThemesFromFolder(skinDir) {
         const nodeFs = this.getNodeFs();
         const nodePath = this.getNodePath();
@@ -496,7 +483,6 @@ class SkinManager {
             .filter(Boolean);
         return themes.length ? themes : ['light', 'solar', 'dark'];
     }
-
     async importSkinFolder(sourceDir) {
         const nodeFs = this.getNodeFs();
         const nodePath = this.getNodePath();
@@ -504,20 +490,17 @@ class SkinManager {
             this.setStatus('Skin import is unavailable in this runtime.', 'error');
             return;
         }
-
         const source = nodePath.resolve(String(sourceDir || ''));
         const skinCss = nodePath.join(source, 'skin.css');
         if (!nodeFs.existsSync(skinCss)) {
             this.setStatus('Selected folder must include skin.css.', 'error');
             return;
         }
-
         const skinsRoot = this.getSkinsRootDir();
         if (!skinsRoot) {
             this.setStatus('Cannot resolve skins directory.', 'error');
             return;
         }
-
         let meta = {};
         const metaPath = nodePath.join(source, 'skin.json');
         if (nodeFs.existsSync(metaPath)) {
@@ -528,7 +511,6 @@ class SkinManager {
                 return;
             }
         }
-
         const folderName = nodePath.basename(source);
         const candidateId = this.slugifySkinId(meta.id || folderName);
         const skinId = this.ensureUniqueSkinId(candidateId);
@@ -537,16 +519,13 @@ class SkinManager {
             this.setStatus(`Skin folder already exists: ${skinId}`, 'error');
             return;
         }
-
         nodeFs.cpSync(source, targetDir, { recursive: true });
-
         const supportedThemes = Array.isArray(meta.supportedThemes) && meta.supportedThemes.length
             ? meta.supportedThemes.map((theme) => String(theme))
             : this.detectThemesFromFolder(targetDir);
         const defaultTheme = supportedThemes.includes(meta.defaultTheme)
             ? meta.defaultTheme
             : (supportedThemes[0] || 'light');
-
         const entry = {
             id: skinId,
             name: String(meta.name || this.toSkinTitle(skinId)),
@@ -565,7 +544,6 @@ class SkinManager {
                     accent: '#3b82f6'
                 }
         };
-
         this.config.skins = [...(this.config.skins || []), entry];
         await this.persistSkinManifest(`Skin "${entry.name}" added.`);
         this.state.skinId = entry.id;
@@ -578,7 +556,6 @@ class SkinManager {
         await this.applySelectedSkin();
         this.render();
     }
-
     validateSkinFolder(sourceDir) {
         const nodeFs = this.getNodeFs();
         const nodePath = this.getNodePath();
@@ -593,17 +570,14 @@ class SkinManager {
         if (!sourceStat.isDirectory()) {
             return { ok: false, reason: 'Drop a folder or a file inside a skin folder.' };
         }
-
         const skinCssPath = nodePath.join(source, 'skin.css');
         if (!nodeFs.existsSync(skinCssPath)) {
             return { ok: false, reason: 'skin.css is required in the root of the skin folder.' };
         }
-
         const skinCssStat = nodeFs.statSync(skinCssPath);
         if (skinCssStat.size > 1024 * 1024) {
             return { ok: false, reason: 'skin.css is too large (>1MB).' };
         }
-
         const metaPath = nodePath.join(source, 'skin.json');
         let meta = null;
         if (nodeFs.existsSync(metaPath)) {
@@ -622,7 +596,6 @@ class SkinManager {
                 return { ok: false, reason: 'skin.json.name must be a string when present.' };
             }
         }
-
         const themes = this.detectThemesFromFolder(source);
         return {
             ok: true,
@@ -631,20 +604,17 @@ class SkinManager {
             themeCount: themes.length
         };
     }
-
     async handleDroppedSkin(event) {
         const folderPath = this.resolveDropFolderPath(event?.dataTransfer);
         if (!folderPath) {
             this.setStatus('No valid file/folder path found in drop payload.', 'warn');
             return;
         }
-
         const verdict = this.validateSkinFolder(folderPath);
         if (!verdict.ok) {
             this.setStatus(`Rejected dropped skin: ${verdict.reason}`, 'error');
             return;
         }
-
         const proposedName = verdict.meta?.name || verdict.folderName;
         const proceed = window.confirm(
             `Import skin "${proposedName}"?\n` +
@@ -655,10 +625,8 @@ class SkinManager {
             this.setStatus('Skin import canceled.', 'info');
             return;
         }
-
         await this.importSkinFolder(folderPath);
     }
-
     async removeSkinById(skinId) {
         const nodeFs = this.getNodeFs();
         const nodePath = this.getNodePath();
@@ -671,13 +639,11 @@ class SkinManager {
             this.setStatus(`Skin "${skinId}" not found.`, 'warn');
             return;
         }
-
         const skinsRoot = this.getSkinsRootDir();
         const skinDir = nodePath.join(skinsRoot, skinId);
         if (nodeFs.existsSync(skinDir)) {
             nodeFs.rmSync(skinDir, { recursive: true, force: true });
         }
-
         this.config.skins = (this.config.skins || []).filter((skin) => skin.id !== skinId);
         if (this.state.skinId === skinId) {
             this.state.skinId = this.config.defaultSkinId || 'default';
@@ -687,29 +653,34 @@ class SkinManager {
         await this.persistSkinManifest(`Skin "${target.name}" removed.`);
         this.render();
     }
-
     async persistSkinManifest(successMessage = 'Skin manifest updated.') {
+        const skins = Array.isArray(this.config.skins) ? this.config.skins : [];
+        localStorage.setItem(this.storage.skinOrder, JSON.stringify(skins.map((skin) => skin.id)));
         const nodeFs = this.getNodeFs();
         const nodePath = this.getNodePath();
         if (!nodeFs || !nodePath) {
-            this.setStatus('Skin changes were applied only for this session.', 'warn');
+            this.setStatus(`${successMessage} Saved in this browser profile.`, 'ok');
             return;
         }
         try {
-            const manifestPath = nodePath.join(this.getSkinsRootDir(), 'manifest.json');
+            const skinsRoot = this.getSkinsRootDir();
+            if (!skinsRoot) {
+                this.setStatus(`${successMessage} Cannot resolve skins directory.`, 'warn');
+                return;
+            }
+            nodeFs.mkdirSync(skinsRoot, { recursive: true });
+            const manifestPath = nodePath.join(skinsRoot, 'manifest.json');
             const payload = {
                 version: Number(this.config.version) || 1,
                 defaultSkinId: this.config.defaultSkinId || 'default',
-                skins: Array.isArray(this.config.skins) ? this.config.skins : []
+                skins
             };
             nodeFs.writeFileSync(manifestPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8');
-            localStorage.setItem(this.storage.skinOrder, JSON.stringify(payload.skins.map((skin) => skin.id)));
             this.setStatus(successMessage, 'ok');
         } catch (error) {
-            this.setStatus(`Failed to save skin manifest: ${error.message}`, 'error');
+            this.setStatus(`${successMessage} Manifest write failed: ${error.message}`, 'warn');
         }
     }
-
     async applySelectedSkin() {
         if (this.state.loading) {
             this.state.pendingApply = true;
@@ -739,7 +710,6 @@ class SkinManager {
             }
         }
     }
-
     async applySkin(skin) {
         if (!skin) return;
         if (skin.id === 'default') {
@@ -751,21 +721,19 @@ class SkinManager {
             this.runDiagnostics();
             return;
         }
-
         const currentTheme = this.getTheme();
         const supported = skin.supportedThemes || [];
         const preferredTheme = this.themePreferences[skin.id];
         const themeCandidate = preferredTheme || currentTheme;
         const theme = supported.includes(themeCandidate) ? themeCandidate : (skin.defaultTheme || supported[0] || 'dark');
         if (theme !== currentTheme) this.setTheme(theme);
-
         try {
             await this.loadStylesheet('active-skin-link', `skins/${skin.id}/skin.css`);
-            await this.loadThemeStylesheet(skin.id, theme);
             document.documentElement.setAttribute('data-active-skin', skin.id);
             document.documentElement.setAttribute('data-skin-contract-token', skin.id);
+            await this.loadThemeStylesheet(skin.id, theme);
             document.documentElement.setAttribute('data-skin-theme-token', theme);
-            this.setStatus(`Skin "${skin.name}" active (${this.getThemeLabel(skin, theme)}).`, 'ok');
+            this.setStatus('', 'info');
             this.logDiagnostic('info', `Applied skin "${skin.id}" with theme "${theme}"`);
         } catch (error) {
             this.clearSkinStyles();
@@ -777,60 +745,41 @@ class SkinManager {
             this.setStatus(`Failed to load skin. Reverted to default. ${error.message}`, 'error');
             this.logDiagnostic('error', `Skin load failed: ${error.message}`);
         }
-
         this.runDiagnostics();
     }
-
     async loadThemeStylesheet(skinId, themeId) {
         await this.loadStylesheet('active-skin-theme-link', `skins/${skinId}/themes/${themeId}.css`);
     }
-
     loadStylesheet(linkId, href) {
-        return new Promise((resolve, reject) => {
-            let link = document.getElementById(linkId);
-            if (!link) {
-                link = document.createElement('link');
-                link.id = linkId;
-                link.rel = 'stylesheet';
-                document.head.appendChild(link);
-            }
-            const nextHref = `${href}?v=1`;
-            if (link.getAttribute('href') === nextHref && link.sheet) {
-                resolve();
-                return;
-            }
-
-            const done = () => {
-                clearTimeout(timer);
-                link.removeEventListener('load', done);
-                link.removeEventListener('error', fail);
-                resolve();
-            };
-            const fail = () => {
-                clearTimeout(timer);
-                link.removeEventListener('load', done);
-                link.removeEventListener('error', fail);
-                reject(new Error(`Unable to load ${href}`));
-            };
-            const timer = setTimeout(() => {
-                link.removeEventListener('load', done);
-                link.removeEventListener('error', fail);
-                reject(new Error(`Timed out loading ${href}`));
-            }, 4500);
-
-            link.addEventListener('load', done, { once: true });
-            link.addEventListener('error', fail, { once: true });
-            link.href = nextHref;
+        this._stylesheetInflight = this._stylesheetInflight || new Map();
+        const active = this._stylesheetInflight.get(linkId);
+        if (active && active.sourceHref === href) return active.promise;
+        this._stylesheetVersion = (this._stylesheetVersion || 0) + 1;
+        const nextHref = `${href}${href.includes('?') ? '&' : '?'}v=${this._stylesheetVersion}`;
+        const current = document.getElementById(linkId);
+        let promise;
+        let trackedPromise;
+        promise = new Promise((resolve, reject) => {
+            const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = nextHref;
+            const isCurrent = () => this._stylesheetInflight.get(linkId)?.promise === trackedPromise;
+            const cleanup = () => { clearTimeout(timer); clearInterval(poll); link.removeEventListener('load', done); link.removeEventListener('error', fail); };
+            const done = () => { cleanup(); if (!isCurrent()) { link.remove(); resolve(); return; } if (current && current !== link) current.remove(); link.id = linkId; link.dataset.loadedHref = nextHref; link.dataset.sourceHref = href; resolve(); };
+            const fail = () => { cleanup(); link.remove(); if (!isCurrent()) { resolve(); return; } reject(new Error(`Unable to load ${href}`)); };
+            const poll = setInterval(() => { if (link.sheet) done(); }, 60);
+            const timer = setTimeout(() => { cleanup(); link.remove(); if (!isCurrent()) { resolve(); return; } reject(new Error(`Timed out loading ${href}`)); }, 4500);
+            link.addEventListener('load', done, { once: true }); link.addEventListener('error', fail, { once: true });
+            document.head.appendChild(link);
         });
+        trackedPromise = promise.finally(() => { if (this._stylesheetInflight.get(linkId)?.promise === trackedPromise) this._stylesheetInflight.delete(linkId); });
+        this._stylesheetInflight.set(linkId, { href: nextHref, sourceHref: href, promise: trackedPromise });
+        return trackedPromise;
     }
-
     clearSkinStyles() {
         ['active-skin-link', 'active-skin-theme-link'].forEach((id) => {
             const node = document.getElementById(id);
             if (node) node.remove();
         });
     }
-
     async disableSkinSystem() {
         this.clearSkinStyles();
         document.documentElement.setAttribute('data-active-skin', 'default');
@@ -839,7 +788,6 @@ class SkinManager {
         this.setStatus('Skin system disabled. Current default UI is untouched.', 'info');
         this.runDiagnostics();
     }
-
     setStatus(text, level = 'info') {
         if (this.silentMode) return;
         if (this.elements.status) {
@@ -848,7 +796,6 @@ class SkinManager {
             this.elements.status.classList.add(level);
         }
     }
-
     render() {
         if (!this.state.enabled) {
             this.setStatus('Skin system is OFF. Click a compatible skin to enable and apply instantly.', 'info');
@@ -857,7 +804,6 @@ class SkinManager {
         this.renderSkinCards();
         this.renderThemePills();
     }
-
     renderActionButtons() {
         if (this.elements.addBtn) {
             this.elements.addBtn.disabled = false;
@@ -870,7 +816,6 @@ class SkinManager {
             ? 'Default skin cannot be removed'
             : `Remove "${skin.name}"`;
     }
-
     renderSkinCards() {
         if (!this.elements.root) return;
         const skins = this.config.skins || [];
@@ -881,6 +826,7 @@ class SkinManager {
             const cardClass = `skin-card${isActive ? ' active' : ''}${skin.compatible ? '' : ' incompatible'}`;
             const preview = skin.preview || {};
             const compatibleTitle = skin.compatible ? 'Ready for runtime apply' : 'Not runtime-compatible yet';
+            const description = String(skin.description || '').trim();
             return `
                 <button
                     class="${cardClass}"
@@ -889,18 +835,16 @@ class SkinManager {
                     data-skin-id="${skin.id}"
                     data-skin-name="${skin.name}"
                     data-compatible="${skin.compatible}"
-                    title="${compatibleTitle} (drag to reorder)">
+                    title="${description ? `${description} • ` : ''}${compatibleTitle} (drag to reorder)">
                     <div class="skin-preview" style="background:${preview.base || 'var(--card-bg)'};--preview-sidebar:${preview.sidebar || 'rgba(0,0,0,0.04)'};--preview-accent:${preview.accent || '#999'};"></div>
                     <div class="skin-card-header">
                         <span class="skin-name">${skin.name}</span>
                         <span class="skin-compat ${compatibilityClass}">${compatibleText}</span>
                     </div>
-                    <div class="skin-card-desc">${skin.description || ''}</div>
                 </button>
             `;
         }).join('');
     }
-
     renderThemePills() {
         if (!this.elements.themes) return;
         const skin = this.getSkin(this.state.skinId) || this.getSkin(this.config.defaultSkinId || 'default');
@@ -914,22 +858,29 @@ class SkinManager {
             return `<button type="button" class="skin-theme-pill${active}" data-theme-id="${themeId}"${disabled}>${label}</button>`;
         }).join('');
     }
-
     getThemeLabel(skin, themeId) {
         return (skin.themeLabels && skin.themeLabels[themeId]) || themeId;
     }
-
     runDiagnostics() {
         const activeSkin = document.documentElement.getAttribute('data-active-skin') || 'default';
         const expectedIds = this.contract.requiredIds || [];
         const missingIds = expectedIds.filter((id) => !document.getElementById(id));
+        const rootStyles = typeof getComputedStyle === 'function' ? getComputedStyle(document.documentElement) : null;
+        const requiredThemeTokens = Array.isArray(this.contract.requiredThemeTokens) ? this.contract.requiredThemeTokens : [];
+        const requiredUiTokens = Array.isArray(this.contract.requiredUiTokens) ? this.contract.requiredUiTokens : [];
+        const requiredAliasTokens = Array.isArray(this.contract.requiredAliasTokens) ? this.contract.requiredAliasTokens : [];
+        const missingTokenList = (tokens = []) => (!rootStyles
+            ? []
+            : tokens.filter((token) => token && !rootStyles.getPropertyValue(token).trim()));
+        const missingThemeTokens = missingTokenList(requiredThemeTokens);
+        const missingUiTokens = missingTokenList(requiredUiTokens);
+        const missingAliasTokens = missingTokenList(requiredAliasTokens);
         const skinToken = document.documentElement.getAttribute('data-skin-contract-token')
-            || getComputedStyle(document.documentElement).getPropertyValue('--skin-contract-id').trim();
+            || (rootStyles ? rootStyles.getPropertyValue('--skin-contract-id').trim() : '');
         const themeToken = document.documentElement.getAttribute('data-skin-theme-token')
-            || getComputedStyle(document.documentElement).getPropertyValue('--skin-theme-id').trim();
+            || (rootStyles ? rootStyles.getPropertyValue('--skin-theme-id').trim() : '');
         const hasRuntimeLinks = !!document.getElementById('active-skin-link') === !!document.getElementById('active-skin-theme-link');
         const currentTheme = this.getTheme();
-
         const report = {
             ts: new Date().toISOString(),
             featureEnabled: this.state.enabled,
@@ -941,13 +892,21 @@ class SkinManager {
             },
             checks: {
                 missingRequiredDomIds: missingIds,
+                missingRequiredThemeTokens: missingThemeTokens,
+                missingRequiredUiTokens: missingUiTokens,
+                missingRequiredAliasTokens: missingAliasTokens,
                 runtimeStylesheetPairConsistent: hasRuntimeLinks
             }
         };
         const tokenMatches = activeSkin === 'default'
             ? (skinToken === 'default')
             : (skinToken === activeSkin && themeToken === currentTheme);
-        report.ok = missingIds.length === 0 && hasRuntimeLinks && tokenMatches;
+        report.ok = missingIds.length === 0
+            && missingThemeTokens.length === 0
+            && missingUiTokens.length === 0
+            && missingAliasTokens.length === 0
+            && hasRuntimeLinks
+            && tokenMatches;
         this.lastDiagnostics = report;
         this.persistDiagnostics(report);
         if (this.elements.diagnosticsOutput && this.elements.diagnosticsOutput.classList.contains('visible')) {
@@ -958,11 +917,9 @@ class SkinManager {
         }
         return report;
     }
-
     persistDiagnostics(report) {
         this.logDiagnostic(report.ok ? 'info' : 'warn', `Skin diagnostics ${report.ok ? 'passed' : 'reported issues'}`);
     }
-
     logDiagnostic(level, message) {
         const entry = {
             ts: new Date().toISOString(),
@@ -976,7 +933,6 @@ class SkinManager {
         localStorage.setItem(this.storage.diagnostics, JSON.stringify(history));
         window.__skinDiagnostics = history;
     }
-
     async runAutoTest() {
         const startedAt = new Date().toISOString();
         const previousState = {
@@ -987,12 +943,10 @@ class SkinManager {
         const compatibleSkins = (this.config.skins || []).filter((skin) => skin.compatible && skin.id !== 'default');
         const cases = [];
         this.silentMode = true;
-
         try {
             this.state.enabled = true;
             localStorage.setItem(this.storage.enabled, 'true');
             if (this.elements.enabled) this.elements.enabled.checked = true;
-
             for (const skin of compatibleSkins) {
                 const themes = skin.supportedThemes || ['light', 'solar', 'dark'];
                 for (const theme of themes) {
@@ -1021,7 +975,6 @@ class SkinManager {
             await this.applySelectedSkin();
             this.render();
         }
-
         const failed = cases.filter((item) => !item.ok);
         const summary = {
             ts: startedAt,
@@ -1038,7 +991,6 @@ class SkinManager {
         return summary;
     }
 }
-
 window.skinManager = new SkinManager();
 document.addEventListener('DOMContentLoaded', () => {
     window.skinManager.initialize().catch((error) => {

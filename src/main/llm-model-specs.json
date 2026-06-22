@@ -26,11 +26,7 @@
         "toggle": false,
         "effortLevels": [],
         "maxTokens": false,
-        "visibilityModes": [
-          "show",
-          "min",
-          "hide"
-        ],
+        "visibilityModes": ["show", "min", "hide"],
         "outputChannel": "none",
         "parameterMode": "none",
         "defaultEnabled": false
@@ -45,18 +41,7 @@
       "contextWindow": {
         "supported": false,
         "configurable": false,
-        "presets": [
-          4096,
-          8192,
-          16384,
-          32768,
-          49152,
-          65536,
-          98304,
-          131072,
-          196608,
-          262144
-        ],
+        "presets": [4096, 8192, 16384, 32768, 49152, 65536, 98304, 131072, 196608, 262144],
         "min": 4096,
         "max": 262144
       },
@@ -111,12 +96,7 @@
         {
           "id": "ollama-qwen-reasoning",
           "label": "Qwen / QwQ Reasoning",
-          "match": [
-            "qwen3*",
-            "qwen2.5*",
-            "qwen*",
-            "qwq*"
-          ],
+          "match": ["qwen3*", "qwen2.5*", "qwen*", "qwq*"],
           "runtime": {
             "reasoning": {
               "enabled": true
@@ -131,18 +111,12 @@
               "defaultEnabled": true
             }
           },
-          "notes": [
-            "Uses /think and /nothink prefixes, which matches the existing working behavior in this app."
-          ]
+          "notes": ["Uses /think and /nothink prefixes, which matches the existing working behavior in this app."]
         },
         {
           "id": "ollama-deepseek-reasoning",
           "label": "DeepSeek Reasoning",
-          "match": [
-            "deepseek-r1*",
-            "deepseek-r1-distill*",
-            "deepseek*"
-          ],
+          "match": ["deepseek-r1*", "deepseek-r1-distill*", "deepseek*"],
           "runtime": {
             "reasoning": {
               "enabled": true
@@ -157,18 +131,12 @@
               "defaultEnabled": true
             }
           },
-          "notes": [
-            "Reasoning is treated as inline output for local Ollama models."
-          ]
+          "notes": ["Reasoning is treated as inline output for local Ollama models."]
         },
         {
           "id": "ollama-gpt-oss-reasoning",
           "label": "GPT OSS / Kimi Reasoning",
-          "match": [
-            "gpt-oss*",
-            "openai/gpt-oss-*",
-            "kimi*"
-          ],
+          "match": ["gpt-oss*", "openai/gpt-oss-*", "kimi*"],
           "runtime": {
             "reasoning": {
               "enabled": true,
@@ -179,19 +147,13 @@
             "reasoning": {
               "supported": true,
               "toggle": true,
-              "effortLevels": [
-                "low",
-                "medium",
-                "high"
-              ],
+              "effortLevels": ["low", "medium", "high"],
               "outputChannel": "inline",
               "parameterMode": "prompt_hint",
               "defaultEnabled": true
             }
           },
-          "notes": [
-            "For GPT OSS / Kimi aliases on Ollama, reasoning is guided with prompt hints instead of slash commands."
-          ]
+          "notes": ["For GPT OSS / Kimi aliases on Ollama, reasoning is guided with prompt hints instead of slash commands."]
         }
       ]
     },
@@ -228,6 +190,9 @@
         ]
       },
       "runtime": {
+        "contextWindow": {
+          "value": 8192
+        },
         "streaming": {
           "text": false,
           "reasoning": false
@@ -238,27 +203,20 @@
           "text": true,
           "reasoning": "inline"
         },
+        "contextWindow": {
+          "supported": true,
+          "configurable": true
+        },
         "requestOverrides": {
           "supported": true
         }
       },
-      "notes": [
-        "LM Studio exposes streaming, but this app currently consumes responses as complete messages."
-      ],
+      "notes": ["LM Studio exposes streaming, but this app currently consumes responses as complete messages."],
       "models": [
         {
           "id": "lmstudio-generic-reasoning",
           "label": "Generic Local Reasoning",
-          "match": [
-            "qwen*",
-            "qwq*",
-            "deepseek*",
-            "r1*",
-            "gpt-oss*",
-            "gpt-oss-*",
-            "gpt-oss 120*",
-            "openai/gpt-oss-*"
-          ],
+          "match": ["qwen*", "qwq*", "deepseek*", "r1*", "gpt-oss*", "gpt-oss-*", "gpt-oss 120*", "openai/gpt-oss-*"],
           "capabilities": {
             "reasoning": {
               "supported": true,
@@ -268,9 +226,7 @@
               "defaultEnabled": false
             }
           },
-          "notes": [
-            "LM Studio does not expose a unified reasoning parameter, so the app falls back to prompt guidance."
-          ]
+          "notes": ["LM Studio does not expose a unified reasoning parameter, so the app falls back to prompt guidance."]
         }
       ]
     },
@@ -314,20 +270,12 @@
           "requireParameters": true
         }
       },
-      "notes": [
-        "OpenRouter can normalize reasoning controls across multiple backend providers.",
-        "Provider routing is configured to require parameter support when reasoning settings are used."
-      ],
+      "notes": ["OpenRouter can normalize reasoning controls across multiple backend providers.", "Provider routing is configured to require parameter support when reasoning settings are used."],
       "models": [
         {
           "id": "openrouter-gpt-oss",
           "label": "GPT OSS",
-          "match": [
-            "openai/gpt-oss-*",
-            "gpt-oss-*",
-            "gpt-oss*",
-            "gpt-oss 120*"
-          ],
+          "match": ["openai/gpt-oss-*", "gpt-oss-*", "gpt-oss*", "gpt-oss 120*"],
           "runtime": {
             "reasoning": {
               "enabled": true,
@@ -338,29 +286,18 @@
             "reasoning": {
               "supported": true,
               "toggle": true,
-              "effortLevels": [
-                "low",
-                "medium",
-                "high"
-              ],
+              "effortLevels": ["low", "medium", "high"],
               "outputChannel": "separate",
               "parameterMode": "openrouter_reasoning",
               "defaultEnabled": true
             }
           },
-          "notes": [
-            "Maps to OpenRouter reasoning.effort with GPT OSS-friendly levels."
-          ]
+          "notes": ["Maps to OpenRouter reasoning.effort with GPT OSS-friendly levels."]
         },
         {
           "id": "openrouter-qwen-thinking",
           "label": "Qwen Thinking",
-          "match": [
-            "qwen/qwen3.5*",
-            "qwen/qwen3*",
-            "qwen/qwq*",
-            "qwen*"
-          ],
+          "match": ["qwen/qwen3.5*", "qwen/qwen3*", "qwen/qwq*", "qwen*"],
           "runtime": {
             "reasoning": {
               "enabled": true,
@@ -377,17 +314,12 @@
               "defaultEnabled": true
             }
           },
-          "notes": [
-            "OpenRouter maps reasoning.max_tokens to thinking_budget for supported Alibaba Qwen models."
-          ]
+          "notes": ["OpenRouter maps reasoning.max_tokens to thinking_budget for supported Alibaba Qwen models."]
         },
         {
           "id": "openrouter-deepseek-reasoning",
           "label": "DeepSeek Reasoning",
-          "match": [
-            "deepseek/deepseek-r1*",
-            "deepseek-r1*"
-          ],
+          "match": ["deepseek/deepseek-r1*", "deepseek-r1*"],
           "runtime": {
             "reasoning": {
               "enabled": true
@@ -402,9 +334,7 @@
               "defaultEnabled": true
             }
           },
-          "notes": [
-            "Reasoning output may be returned separately when the selected OpenRouter backend supports it."
-          ]
+          "notes": ["Reasoning output may be returned separately when the selected OpenRouter backend supports it."]
         }
       ]
     },
@@ -431,16 +361,12 @@
           "reasoning": "separate"
         }
       },
-      "notes": [
-        "DashScope models can expose reasoning separately from the final answer when enabled."
-      ],
+      "notes": ["DashScope models can expose reasoning separately from the final answer when enabled."],
       "models": [
         {
           "id": "qwen-3.5-thinking",
           "label": "Qwen 3.5 Thinking",
-          "match": [
-            "qwen3.5*"
-          ],
+          "match": ["qwen3.5*"],
           "runtime": {
             "reasoning": {
               "enabled": true,
@@ -457,20 +383,12 @@
               "defaultEnabled": true
             }
           },
-          "notes": [
-            "Qwen 3.5 thinking models default to reasoning on and support thinking_budget."
-          ]
+          "notes": ["Qwen 3.5 thinking models default to reasoning on and support thinking_budget."]
         },
         {
           "id": "qwen-hybrid-thinking",
           "label": "Qwen Hybrid Thinking",
-          "match": [
-            "qwen-plus*",
-            "qwen-max*",
-            "qwen-turbo*",
-            "qwen3*",
-            "qwq*"
-          ],
+          "match": ["qwen-plus*", "qwen-max*", "qwen-turbo*", "qwen3*", "qwq*"],
           "capabilities": {
             "reasoning": {
               "supported": true,
@@ -481,9 +399,7 @@
               "defaultEnabled": false
             }
           },
-          "notes": [
-            "Hybrid Qwen models can be switched between normal generation and reasoning mode."
-          ]
+          "notes": ["Hybrid Qwen models can be switched between normal generation and reasoning mode."]
         }
       ]
     },
@@ -509,17 +425,12 @@
           }
         ]
       },
-      "notes": [
-        "ChatGPT subscription plans do not include API credits; connect this provider with an OpenAI API key.",
-        "The API model list is discovered from the official /v1/models endpoint."
-      ],
+      "notes": ["ChatGPT subscription plans do not include API credits; connect this provider with an OpenAI API key.", "The API model list is discovered from the official /v1/models endpoint."],
       "models": [
         {
           "id": "openai-gpt-5.2",
           "label": "GPT-5.2 Family",
-          "match": [
-            "gpt-5.2*"
-          ],
+          "match": ["gpt-5.2*"],
           "runtime": {
             "reasoning": {
               "enabled": true,
@@ -533,12 +444,7 @@
             "reasoning": {
               "supported": true,
               "toggle": true,
-              "effortLevels": [
-                "low",
-                "medium",
-                "high",
-                "xhigh"
-              ],
+              "effortLevels": ["low", "medium", "high", "xhigh"],
               "outputChannel": "separate",
               "parameterMode": "openai_reasoning_effort",
               "defaultEnabled": true
@@ -552,18 +458,12 @@
               "vision": true
             }
           },
-          "notes": [
-            "GPT-5.2 supports configurable reasoning effort and image input."
-          ]
+          "notes": ["GPT-5.2 supports configurable reasoning effort and image input."]
         },
         {
           "id": "openai-gpt-5",
           "label": "GPT-5 Family",
-          "match": [
-            "gpt-5",
-            "gpt-5-mini*",
-            "gpt-5-nano*"
-          ],
+          "match": ["gpt-5", "gpt-5-mini*", "gpt-5-nano*"],
           "runtime": {
             "reasoning": {
               "enabled": true,
@@ -577,12 +477,7 @@
             "reasoning": {
               "supported": true,
               "toggle": true,
-              "effortLevels": [
-                "minimal",
-                "low",
-                "medium",
-                "high"
-              ],
+              "effortLevels": ["minimal", "low", "medium", "high"],
               "outputChannel": "separate",
               "parameterMode": "openai_reasoning_effort",
               "defaultEnabled": true
@@ -596,16 +491,12 @@
               "vision": true
             }
           },
-          "notes": [
-            "GPT-5 family models are reasoning-first and accept image input."
-          ]
+          "notes": ["GPT-5 family models are reasoning-first and accept image input."]
         },
         {
           "id": "openai-gpt-4.1",
           "label": "GPT-4.1 Family",
-          "match": [
-            "gpt-4.1*"
-          ],
+          "match": ["gpt-4.1*"],
           "runtime": {
             "contextWindow": {
               "value": 1047576
@@ -621,9 +512,7 @@
               "vision": true
             }
           },
-          "notes": [
-            "GPT-4.1 is a non-reasoning family with image input support."
-          ]
+          "notes": ["GPT-4.1 is a non-reasoning family with image input support."]
         }
       ]
     },
@@ -649,19 +538,12 @@
           }
         ]
       },
-      "notes": [
-        "Groq exposes an OpenAI-compatible API surface and a /models endpoint."
-      ],
+      "notes": ["Groq exposes an OpenAI-compatible API surface and a /models endpoint."],
       "models": [
         {
           "id": "groq-gpt-oss",
           "label": "GPT OSS on Groq",
-          "match": [
-            "openai/gpt-oss-*",
-            "gpt-oss-*",
-            "gpt-oss*",
-            "gpt-oss 120*"
-          ],
+          "match": ["openai/gpt-oss-*", "gpt-oss-*", "gpt-oss*", "gpt-oss 120*"],
           "runtime": {
             "reasoning": {
               "enabled": true
@@ -674,11 +556,7 @@
             "reasoning": {
               "supported": true,
               "toggle": true,
-              "effortLevels": [
-                "low",
-                "medium",
-                "high"
-              ],
+              "effortLevels": ["low", "medium", "high"],
               "outputChannel": "inline",
               "parameterMode": "openai_reasoning_effort",
               "defaultEnabled": true
@@ -689,9 +567,7 @@
               "max": 131072
             }
           },
-          "notes": [
-            "Groq exposes GPT OSS models through its OpenAI-compatible API, but explicit reasoning controls vary by model."
-          ]
+          "notes": ["Groq exposes GPT OSS models through its OpenAI-compatible API, but explicit reasoning controls vary by model."]
         }
       ]
     },
@@ -717,16 +593,12 @@
           }
         ]
       },
-      "notes": [
-        "DeepSeek's reasoner returns reasoning_content separately from the final answer."
-      ],
+      "notes": ["DeepSeek's reasoner returns reasoning_content separately from the final answer."],
       "models": [
         {
           "id": "deepseek-reasoner",
           "label": "DeepSeek Reasoner",
-          "match": [
-            "deepseek-reasoner*"
-          ],
+          "match": ["deepseek-reasoner*"],
           "runtime": {
             "reasoning": {
               "enabled": true
@@ -749,16 +621,12 @@
               "max": 128000
             }
           },
-          "notes": [
-            "DeepSeek reasoner always returns a reasoning trace before the final answer."
-          ]
+          "notes": ["DeepSeek reasoner always returns a reasoning trace before the final answer."]
         },
         {
           "id": "deepseek-chat",
           "label": "DeepSeek Chat",
-          "match": [
-            "deepseek-chat*"
-          ],
+          "match": ["deepseek-chat*"],
           "runtime": {
             "contextWindow": {
               "value": 128000
@@ -771,9 +639,7 @@
               "max": 128000
             }
           },
-          "notes": [
-            "DeepSeek chat models use the same OpenAI-compatible surface without separate reasoning content."
-          ]
+          "notes": ["DeepSeek chat models use the same OpenAI-compatible surface without separate reasoning content."]
         }
       ]
     },
@@ -799,34 +665,24 @@
           }
         ]
       },
-      "notes": [
-        "Mistral exposes chat completions and a model list through its official API."
-      ],
+      "notes": ["Mistral exposes chat completions and a model list through its official API."],
       "models": [
         {
           "id": "mistral-pixtral",
           "label": "Pixtral Vision",
-          "match": [
-            "pixtral*"
-          ],
+          "match": ["pixtral*"],
           "capabilities": {
             "modalities": {
               "vision": true
             }
           },
-          "notes": [
-            "Pixtral models accept visual input."
-          ]
+          "notes": ["Pixtral models accept visual input."]
         },
         {
           "id": "mistral-codestral",
           "label": "Codestral",
-          "match": [
-            "codestral*"
-          ],
-          "notes": [
-            "Codestral-family models are code-oriented but do not expose provider-specific reasoning controls here."
-          ]
+          "match": ["codestral*"],
+          "notes": ["Codestral-family models are code-oriented but do not expose provider-specific reasoning controls here."]
         }
       ]
     },
@@ -852,16 +708,12 @@
           }
         ]
       },
-      "notes": [
-        "Anthropic provides an OpenAI SDK compatibility layer, but recommends the native Anthropic API for full feature coverage."
-      ],
+      "notes": ["Anthropic provides an OpenAI SDK compatibility layer, but recommends the native Anthropic API for full feature coverage."],
       "models": [
         {
           "id": "anthropic-claude",
           "label": "Claude Family",
-          "match": [
-            "claude*"
-          ],
+          "match": ["claude*"],
           "runtime": {
             "contextWindow": {
               "value": 200000
@@ -877,9 +729,7 @@
               "vision": true
             }
           },
-          "notes": [
-            "Claude models support image input, but compatibility-mode feature coverage is narrower than the native Anthropic API."
-          ]
+          "notes": ["Claude models support image input, but compatibility-mode feature coverage is narrower than the native Anthropic API."]
         }
       ]
     },
@@ -913,24 +763,12 @@
           }
         ]
       },
-      "notes": [
-        "Model discovery depends on the server exposing a standard /models endpoint.",
-        "Use request overrides for provider-specific extra body parameters."
-      ],
+      "notes": ["Model discovery depends on the server exposing a standard /models endpoint.", "Use request overrides for provider-specific extra body parameters."],
       "models": [
         {
           "id": "byok-generic-reasoning",
           "label": "Generic OpenAI-Compatible Reasoning",
-          "match": [
-            "qwen*",
-            "qwq*",
-            "deepseek*",
-            "r1*",
-            "gpt-oss*",
-            "gpt-oss-*",
-            "gpt-oss 120*",
-            "openai/gpt-oss-*"
-          ],
+          "match": ["qwen*", "qwq*", "deepseek*", "r1*", "gpt-oss*", "gpt-oss-*", "gpt-oss 120*", "openai/gpt-oss-*"],
           "capabilities": {
             "reasoning": {
               "supported": true,
@@ -943,9 +781,7 @@
               "supported": true
             }
           },
-          "notes": [
-            "Generic OpenAI-compatible endpoints do not standardize reasoning controls, so this provider falls back to prompt guidance plus request overrides."
-          ]
+          "notes": ["Generic OpenAI-compatible endpoints do not standardize reasoning controls, so this provider falls back to prompt guidance plus request overrides."]
         }
       ]
     },
@@ -978,13 +814,27 @@
             "placeholder": "Optional",
             "required": false,
             "helpText": "Some local servers use a bearer token; leave blank if yours does not."
+          },
+          {
+            "id": "modelParams",
+            "label": "Model Params",
+            "type": "textarea",
+            "rows": 3,
+            "placeholder": "--model qwen3.5 --temperature 0.2 --max_tokens 2048",
+            "required": false
+          },
+          {
+            "id": "serverParams",
+            "label": "Server Params",
+            "type": "textarea",
+            "rows": 3,
+            "placeholder": "--url http://127.0.0.1:8000/v1 --api-key mytoken",
+            "required": false,
+            "helpText": "Optional server/transport args. Supports --url/--base-url/--address and --api-key."
           }
         ]
       },
-      "notes": [
-        "vLLM exposes an OpenAI-compatible server and official model discovery via /models.",
-        "llama.cpp server exposes an OpenAI-compatible chat completions endpoint; model discovery varies by server build."
-      ],
+      "notes": ["vLLM exposes an OpenAI-compatible server and official model discovery via /models.", "llama.cpp server exposes an OpenAI-compatible chat completions endpoint; model discovery varies by server build."],
       "capabilities": {
         "requestOverrides": {
           "supported": true
@@ -994,16 +844,7 @@
         {
           "id": "local-openai-generic-reasoning",
           "label": "Generic Local Reasoning",
-          "match": [
-            "qwen*",
-            "qwq*",
-            "deepseek*",
-            "r1*",
-            "gpt-oss*",
-            "gpt-oss-*",
-            "gpt-oss 120*",
-            "openai/gpt-oss-*"
-          ],
+          "match": ["qwen*", "qwq*", "deepseek*", "r1*", "gpt-oss*", "gpt-oss-*", "gpt-oss 120*", "openai/gpt-oss-*"],
           "capabilities": {
             "reasoning": {
               "supported": true,
@@ -1016,18 +857,12 @@
               "supported": true
             }
           },
-          "notes": [
-            "Use request overrides for server-specific settings such as vendor-specific max context or draft-model options."
-          ]
+          "notes": ["Use request overrides for server-specific settings such as vendor-specific max context or draft-model options."]
         },
         {
           "id": "local-openai-vision",
           "label": "Generic Vision Alias",
-          "match": [
-            "*-vl*",
-            "*vision*",
-            "pixtral*"
-          ],
+          "match": ["*-vl*", "*vision*", "pixtral*"],
           "capabilities": {
             "modalities": {
               "vision": true

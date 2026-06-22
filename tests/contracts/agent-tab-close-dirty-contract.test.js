@@ -25,6 +25,11 @@ module.exports = {
       'Expected continuity layer to mark tabs as changed on sends/updates'
     );
     assert.includes(
+      continuity,
+      'activeTab.needsReload = false;',
+      'Expected local send completion to clear active reload instead of reloading and jumping scroll'
+    );
+    assert.includes(
       commands,
       "this.commands.set('/continue'",
       'Expected /continue command registration'

@@ -10,6 +10,8 @@ module.exports = {
     assert.equal(defaultPaths.promptBasePath, path.join(rootPath, 'prompts'), 'Expected prompt base path to derive from agentin root');
     assert.equal(defaultPaths.promptTemplatesDir, path.join(rootPath, 'prompts', 'templates'), 'Expected prompt templates path to derive from prompt base path');
     assert.equal(defaultPaths.memoryBasePath, path.join(rootPath, 'memory'), 'Expected memory path to derive from agentin root');
+    assert.equal(defaultPaths.a2aBaseDir, path.join(rootPath, 'a2a'), 'Expected A2A base path to derive from agentin root');
+    assert.equal(defaultPaths.a2aTargetsDir, path.join(rootPath, 'a2a', 'targets'), 'Expected A2A targets path to derive from A2A base path');
     assert.equal(defaultPaths.backgroundDaemonBasePath, path.join(rootPath, 'agents', 'pro', 'background-daemon'), 'Expected daemon path to derive from agent base path');
 
     const customPromptBase = path.join('custom', 'prompts');

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { buildRuntimePaths } = require('./runtime-paths');
 
 /**
  * AgentMemory - Manages agent's persistent memory with security rules
@@ -12,7 +13,7 @@ const crypto = require('crypto');
  */
 class AgentMemory {
     constructor(basePath = null) {
-        this.basePath = basePath || path.join(__dirname, '../../agentin/memory');
+        this.basePath = basePath || buildRuntimePaths().memoryBasePath;
         this.lockDays = 7;
         this.hashFile = path.join(this.basePath, '.hashes.json');
         this.hashes = this.loadHashes();

@@ -16,16 +16,22 @@ const { getEffectiveLlmSelection } = require('./llm-state');
  *   - Routing sendMessage → adapter.call()
  */
 class AIService {
-  constructor(db, mcpServer = null) {
+  constructor(db, mcpServer = null, options = {}) {
     this.db = db;
     this.mcpServer = mcpServer;
+    this.windowManager = options.windowManager || null;
     this.currentProvider = 'ollama';
     this.systemPrompt = 'You are a helpful AI assistant with access to calendar and todo functions.';
 
     // Provider adapters
     this.adapters = {
       ollama: new OllamaAdapter(db),
-      lmstudio: new LMStudioAdapter(db),
+      lmstudio: new LMStudioAdapter(db, {
+        onSoftAlert: ({ message, level = 'info', provider = 'lmstudio' } = {}) => {
+          if (!this.windowManager?.send || !message) return;
+          this.windowManager.send('llm-soft-alert', { provider, level, message });
+        }
+      }),
       openrouter: new OpenRouterAdapter(db),
       qwen: new QwenAdapter(db),
       openai: new OpenAIHybridAdapter(db),
@@ -69,8 +75,9 @@ class AIService {
   /**
    * Stop current generation — delegates to active adapter.
    */
-  stopGeneration() {
-    const adapter = this.adapters[this.currentProvider];
+  stopGeneration(provider = null) {
+    const targetProvider = String(provider || this.currentProvider || '').trim().toLowerCase();
+    const adapter = this.adapters[targetProvider];
     if (adapter) {
       return adapter.stop();
     }

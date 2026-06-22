@@ -57,6 +57,12 @@
                 const status = String(run.status || '').toLowerCase();
                 return status === 'queued' || status === 'running' || status === 'cancelling';
             });
+            if (active.length === 0) {
+                if (panel?.showNotification) {
+                    panel.showNotification('No active subagent runs to stop.', 'info');
+                }
+                return;
+            }
             let stopped = 0;
             for (const run of active) {
                 const result = await window.electronAPI.subagents.stopRun(run.run_id);
@@ -170,21 +176,51 @@
             stopBtn.textContent = 'Stop';
             const runStatus = normalizedStatus;
             const canStop = runStatus === 'queued' || runStatus === 'running' || runStatus === 'cancelling';
-            stopBtn.disabled = !canStop;
+
+            actions.appendChild(openBtn);
             stopBtn.addEventListener('click', async (event) => {
                 event.stopPropagation();
-                if (!canStop || !window.electronAPI?.subagents?.stopRun) return;
+                if (!window.electronAPI?.subagents?.stopRun) return;
+                stopBtn.disabled = true;
+                stopBtn.textContent = canStop ? 'Stopping...' : 'Stop';
                 const result = await window.electronAPI.subagents.stopRun(run.run_id);
-                if (!result?.success && panel?.showNotification) {
-                    panel.showNotification(result?.error || 'Failed to stop subagent run', 'error');
+                if (panel?.showNotification) {
+                    if (result?.success) {
+                        const message = result?.alreadyTerminal
+                            ? `No live execution for subagent run ${run.run_id}; status remains ${runStatus}.`
+                            : `Stopped subagent run ${run.run_id}.`;
+                        panel.showNotification(message, result?.alreadyTerminal ? 'info' : undefined);
+                    } else {
+                        panel.showNotification(result?.error || `Subagent run ${run.run_id} is already ${runStatus || 'finished'}.`, 'info');
+                    }
                 }
                 if (deps.refreshSubagentManagerTab) {
                     await deps.refreshSubagentManagerTab(panel);
                 }
             });
-
-            actions.appendChild(openBtn);
             actions.appendChild(stopBtn);
+            const closeBtn = document.createElement('button');
+            closeBtn.type = 'button';
+            closeBtn.className = 'compact-btn';
+            closeBtn.textContent = 'Close';
+            closeBtn.addEventListener('click', async (event) => {
+                event.stopPropagation();
+                if (!window.electronAPI?.subagents?.closeRun) return;
+                closeBtn.disabled = true;
+                closeBtn.textContent = 'Closing...';
+                const result = await window.electronAPI.subagents.closeRun(run.run_id);
+                if (panel?.showNotification) {
+                    if (result?.success) {
+                        panel.showNotification(`Closed subagent run ${run.run_id}.`, 'info');
+                    } else {
+                        panel.showNotification(result?.error || `Failed to close subagent run ${run.run_id}.`, 'error');
+                    }
+                }
+                if (deps.refreshSubagentManagerTab) {
+                    await deps.refreshSubagentManagerTab(panel);
+                }
+            });
+            actions.appendChild(closeBtn);
             item.appendChild(actions);
             list.appendChild(item);
         });
@@ -273,6 +309,26 @@
 
             const actions = document.createElement('div');
             actions.className = 'superagent-manager-item-actions';
+            const visible = agent.visibleInSidebar !== false && agent.visible_in_sidebar !== 0;
+
+            const showBtn = document.createElement('button');
+            showBtn.type = 'button';
+            showBtn.className = `compact-btn superagent-manager-visibility${visible ? ' active' : ''}`;
+            showBtn.textContent = 'Show';
+            showBtn.title = visible ? 'Shown in left sidebar' : 'Hidden from left sidebar';
+            showBtn.setAttribute('aria-pressed', visible ? 'true' : 'false');
+            showBtn.addEventListener('click', async (event) => {
+                event.stopPropagation();
+                if (!window.electronAPI?.agents?.setSidebarVisible) return;
+                const result = await window.electronAPI.agents.setSidebarVisible(agent.id, !visible);
+                if (result?.success === false && panel?.showNotification) {
+                    panel.showNotification(result?.error || 'Failed to update agent visibility', 'error');
+                    return;
+                }
+                if (deps.refreshSuperagentManagerTab) {
+                    await deps.refreshSuperagentManagerTab(panel);
+                }
+            });
 
             const openChatBtn = document.createElement('button');
             openChatBtn.type = 'button';
@@ -310,6 +366,7 @@
                 }
             });
 
+            actions.appendChild(showBtn);
             actions.appendChild(openChatBtn);
             actions.appendChild(settingsBtn);
             actions.appendChild(stopBtn);

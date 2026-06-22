@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import ensure_directories, settings
 from backend.routers.agent import router as agent_router
+from backend.routers.stt import router as stt_router
 from backend.routers.system import router as system_router
 from backend.routers.voices import router as voices_router
 from backend.tts_engine import tts_engine
@@ -70,3 +71,4 @@ async def get_health_alias():
 app.include_router(system_router)
 app.include_router(voices_router)
 app.include_router(agent_router)
+app.include_router(stt_router)

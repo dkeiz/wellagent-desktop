@@ -1,4 +1,7 @@
 const MCPServer = require('../../src/main/mcp-server');
+const fs = require('fs');
+const path = require('path');
+const comfyStudioManifest = require('../../agentin/plugins/agent-comfy-studio/plugin.json');
 
 function slugify(value) {
   return String(value || '')
@@ -10,7 +13,7 @@ function slugify(value) {
 module.exports = {
   name: 'mcp-agent-scope-contract',
   tags: ['contract', 'fast'],
-  async run({ assert }) {
+  async run({ assert, rootDir }) {
     const db = {
       async getSetting(key) {
         if (key === 'tool_timeout_ms') return '5000';
@@ -41,7 +44,8 @@ module.exports = {
     server.setAgentManager({
       async getAgent(id) {
         if (Number(id) === 101) return { id, name: 'Universal RAG Agent' };
-        if (Number(id) === 202) return { id, name: 'Web Researcher' };
+        if (Number(id) === 202) return { id, name: 'Web Search' };
+        if (Number(id) === 303) return { id, name: 'ComfyUI Studio' };
         return null;
       },
       _getSafeFolderName(name) {
@@ -88,5 +92,21 @@ module.exports = {
 
     assert.ok(blockedError, 'Scoped tool should reject for non-matching agent');
     assert.includes(blockedError.message, 'not allowed for the active agent scope');
+
+    assert.equal(
+      slugify(comfyStudioManifest.agentSlug),
+      'comfyui-studio',
+      'ComfyUI Studio plugin must use the default ComfyUI Studio agent slug'
+    );
+    assert.equal(
+      Array.isArray(comfyStudioManifest.agentSlugs),
+      false,
+      'ComfyUI Studio plugin should not carry duplicate alias scopes'
+    );
+    assert.equal(
+      fs.existsSync(path.join(rootDir, 'agentin', 'agents', 'pro', 'comfy-studio')),
+      false,
+      'Legacy comfy-studio agent folder should not exist alongside comfyui-studio'
+    );
   }
 };

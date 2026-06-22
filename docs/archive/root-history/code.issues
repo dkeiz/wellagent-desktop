@@ -1,0 +1,469 @@
+================================================================================
+  CODE ISSUES — LocalAgent Desktop
+  Practical review: bugs, redundancy, overprotection, test gaps
+  Generated: 2026-05-07
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 1. ACTUAL BUGS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[BUG-01] stripToolPatterns exists in 3 different places with 3 different implementations
+  Files:
+    - src/main/ipc/shared-utils.js:1-54  (character-by-character state machine, correct)
+    - src/main/tool-chain-controller.js:77-112  (String.replace with \x00 placeholders, buggy)
+    - src/main/agent-loop.js:319-322  (naive regex, doesn't handle nested braces at all)
+  
+  Bug in tool-chain-controller.js:79:
+    The `.replace()` callback receives (match, offset) but tries to use
+    the outer `text` variable to scan ahead. The problem: `.replace()`
+    doesn't support "consume more characters than the match" — it replaces
+    only the matched substring, so the \x00 placeholder hack inserts
+    NUL chars for the JSON body length, but the *match itself* is still
+    only the `TOOL:name{` prefix. The actual JSON body remains in the
+    string and only gets removed if the \x00 count is exactly right.
+    Edge cases with unicode multi-byte chars will miscalculate the count.
+
+  Bug in agent-loop.js:321:
+    `/TOOL:\w+\{[^}]*\}/g` doesn't handle nested braces. A tool call
+    like `TOOL:run_command{"cmd":"echo {hello}"}` will leave `"}` behind
+    because the regex stops at the first `}`.
+
+  Fix: Use ONE canonical implementation. shared-utils.js has the correct
+  one — import it everywhere.
+
+
+[BUG-02] deleteAgent() in agent-manager.js does nothing with the fetched agent
+  File: src/main/agent-manager.js:186-188
+    async deleteAgent(id) {
+        const agent = await this.db.getAgent(id);
+        if (agent) {}  // ← empty block, no cleanup
+        return await this.db.deleteAgent(id);
+    }
+  Meanwhile, the IPC handler in register-agent-system-handlers.js:249-257
+  does call `toolPermissionService.deleteAgentProfile(id)` AFTER
+  agentManager.deleteAgent(). But agent folder, agent sessions, and
+  subagent runs for that agent are never cleaned up.
+  
+  So deleting an agent leaves:
+    - Orphaned folder in agentin/agents/pro/<slug>/
+    - Orphaned chat_sessions rows with agent_id = <deleted id>
+    - Orphaned subagent_runs rows
+  
+
+[BUG-03] getConversations() ignores the `limit` parameter when sessionId is provided
+  File: src/main/database.js:136-146
+    async getConversations(limit = 100, sessionId = null) {
+        if (sessionId) {
+            return this.all('SELECT * FROM conversations WHERE session_id = ? ORDER BY timestamp', [sessionId]);
+            // ← limit is completely ignored!
+        }
+        // ... also ignored in the second branch
+    }
+  Every caller passes a limit (20, 60, 100) but it's never applied.
+  For long sessions this loads the ENTIRE history into memory.
+
+
+[BUG-04] `connectors:delete` handler re-requires fs and path inside the handler
+  File: src/main/ipc/register-agent-system-handlers.js:191-199
+    ipcMain.handle('connectors:delete', async (event, name) => {
+        // ...
+        const fs = require('fs');    // ← already imported at top of file (line 1)
+        const path = require('path'); // ← already imported at top of file (line 2)
+    });
+  Not a crash, but it shows copy-paste origin. The inner `require` shadows
+  the outer one — works fine but adds confusion.
+
+
+[BUG-05] llm:fetch-qwen-oauth also re-requires os, fs, path inside the handler
+  File: src/main/ipc/register-llm-handlers.js:541-543
+    const os = require('os');
+    const fs = require('fs');
+    const path = require('path');
+  Same pattern — these are already available in the outer scope.
+
+
+[BUG-06] _lockMode / _lockPreemptible on InferenceDispatcher is global but overwritten per call
+  File: src/main/inference-dispatcher.js:25-26, 123-124, 151-153
+  If two dispatches run concurrently (parallel lanes), the second call
+  overwrites `this._lockMode` and `this._lockPreemptible` set by the
+  first. The `finally` block then clears them to null even while the
+  first call is still running. Any code checking these fields mid-flight
+  gets stale or wrong values.
+
+
+[BUG-07] updateCustomTool doesn't update `code` or `input_schema` columns
+  File: src/main/database.js:427-429
+    this.run(
+        'UPDATE custom_tools SET name = ?, description = ? WHERE name = ?',
+        [nextName, nextDescription, existingName]
+    );
+  The UPDATE only sets `name` and `description`. If a user edits the
+  tool's code or input_schema through the UI, those changes are silently
+  dropped. The IPC handler (register-tools-capability-handlers.js:160-163)
+  re-registers the tool in memory with the new code, but it's never persisted
+  to the database — so a restart loses the edit.
+
+
+[BUG-08] addPromptRule always returns `active: false` regardless of DB default
+  File: src/main/database.js:181-188
+    async addPromptRule(rule) {
+        const { name, content, type = 'rule' } = rule;
+        // INSERT doesn't include `active` column — DB default is used
+        const result = this.run(...);
+        return { ...rule, id: result.id, active: false };
+        // ← hardcodes false, ignores DB schema default
+    }
+  If the DB default for `active` is 1 (true), the return value lies.
+  Callers get `active: false` while the DB has `active: 1`.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 2. OVERPROTECTION / REDUNDANT CODE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[OVER-01] setSetting() and saveSetting() are identical twins
+  File: src/main/database.js:304-317
+  Both do: INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)
+  Some callers use setSetting, some use saveSetting. It's confusing.
+  Within the same file: line 213 calls setSetting, line 367 calls saveSetting.
+  Fix: Keep one, alias the other → `saveSetting = setSetting`.
+
+
+[OVER-02] Every DB method is async but none do async work (REVISED — intentional interface)
+  File: src/main/database.js (entire file)
+  `better-sqlite3` is 100% synchronous. Every method wraps sync calls in `async`.
+  REVISED ANALYSIS: This is a forward-compatible interface decision. The app already
+  has a Docker headless mode (docker-entry.js) and may move to a different DB backend
+  (e.g., SQLite with WAL over async I/O, or a networked DB for multi-user). Making
+  the interface async now means callers don't need to change when the backend does.
+  The Promise overhead per call is negligible (~0.01ms per microtask).
+  Severity: LOW (style preference, not a bug)
+  Kept as a note — but this is a reasonable design choice, not overprotection.
+
+
+[OVER-03] Triple session-type check pattern repeated ~15 times
+  File: src/main/ipc/register-chat-data-handlers.js
+  Almost every IPC handler does:
+    if (isPrivateSessionId(sessionId) && privateSessionStore) { ... }
+    if (testClientMode && isTestSessionId(sessionId)) { ... }
+    // normal path
+  
+  This 3-branch pattern is copy-pasted across: get-conversations,
+  add-conversation, clear-conversations, create-chat-session,
+  load-chat-session, clear-chat-session, switch-chat-session,
+  delete-chat-session, delete-all-conversations, send-message,
+  interpret-tool-result, get-session-artifacts, read-session-artifact,
+  write-session-artifact.
+
+  Fix: Extract a session-type dispatcher:
+    function withSession(sessionId, { onPrivate, onTest, onNormal })
+
+
+[OVER-04] Unused `options = {}` parameter in many IPC handlers (REVISED — extensibility pattern)
+  Files: src/main/ipc/register-agent-system-handlers.js
+  Many handlers accept `options = {}` but never read it. (20 handlers listed.)
+  REVISED ANALYSIS: This is a forward-compatible API pattern. The IPC handlers are
+  called via HeadlessIpcBridge in Docker/external-test modes, and may be called by
+  future A2A protocol adapters or connector scripts. Adding `options` now means new
+  callers can pass context (e.g., `{ actor: 'a2a', requestId: '...' }`) without
+  changing the handler signature. The pattern is used consistently and costs nothing.
+  Severity: LOW (intentional, not dead code)
+  Recommendation: Add a one-line JSDoc comment to one handler explaining the pattern,
+  so future contributors know it's intentional.
+
+
+[OVER-05] execute-tool and execute-mcp-tool are nearly identical handlers (REVISED)
+  File: src/main/ipc/register-tools-capability-handlers.js:10-57
+  Both call `mcpServer.executeTool(toolName, params)`. The difference:
+  execute-mcp-tool also checks `result.needsPermission`.
+  REVISED ANALYSIS: execute-tool is the basic path used by workflow runner and
+  internal callers. execute-mcp-tool is the UI-facing path that adds permission
+  checks. The split is intentional — internal callers (daemon, subtask runtime)
+  should bypass permission dialogs. This is a trust-level separation, not duplication.
+  Severity: LOW (intentional, but the naming is confusing)
+  Similarly: get-ai-providers vs get-providers and getProviderModels vs get-models
+  may serve different callers (renderer vs external API). Audit before removing.
+
+
+[OVER-06] getAgentFolderPathById() always returns null
+  File: src/main/agent-manager.js:334-336
+    getAgentFolderPathById(id) {
+        return null;
+    }
+  Dead method. Either implement it or remove it.
+
+
+[OVER-07] isEchoingResult() defined but never called
+  File: src/main/tool-chain-controller.js:553-571
+  The method exists with full JSDoc but no caller anywhere in the codebase.
+
+
+[OVER-08] Overly defensive string coercion patterns
+  Files: Many
+  Pattern like `String(value || '').trim().toLowerCase()` appears 50+ times.
+  In many cases the value is already guaranteed to be a string (e.g., it
+  comes from a DB column that's TEXT, or from a JSON property just parsed).
+  
+  Example from inference-dispatcher.js:53:
+    const provider = String(options.provider || this.aiService.getCurrentProvider() || 'ollama')
+        .trim().toLowerCase() || 'ollama';
+  This has TWO fallbacks to 'ollama' — one inside String(), one outside.
+  If String() returns empty after trim, the outer || catches it. But
+  getCurrentProvider() already returns a non-empty string, so the second
+  fallback is dead code.
+
+
+[OVER-09] Redundant `fs.existsSync` before `fs.statSync` / `fs.readFileSync`
+  Files: Many (agent-manager.js, background-memory-daemon.js, plugin-manager.js)
+  Pattern: if (fs.existsSync(path)) { fs.readFileSync(path) }
+  This is a TOCTOU pattern (time-of-check to time-of-use) and doubles
+  the filesystem calls. Better: just try/catch the readFileSync.
+
+
+[OVER-10] dispatchOptions built with 7 individual `if` checks instead of spread
+  File: src/main/tool-chain-controller.js:236-262
+    if (options.includeTools !== undefined) {
+        dispatchOptions.includeTools = options.includeTools;
+    }
+    if (options.includeRules !== undefined) {
+        dispatchOptions.includeRules = options.includeRules;
+    }
+    // ... 5 more identical patterns
+  
+  Could be: const dispatchOptions = { mode, sessionId, agentId,
+    ...pick(options, ['includeTools','includeRules','includeEnv', ...]) };
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 3. CODE DUPLICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[DUP-01] LM Studio URL parsing duplicated 4 times
+  File: src/main/ipc/register-llm-handlers.js
+    - buildLmstudioEndpoint()           lines 232-250
+    - getLmstudioLoadedInstanceConfig() lines 271-297  (inline URL parsing)
+    - buildLmstudioNativeModelsEndpoint() lines 299-312
+    - enforceLmstudioLoadedConfig()     lines 314-391  (inline URL parsing)
+  
+  Each one does the same: parse base URL, replace localhost→127.0.0.1,
+  strip trailing /v1, build endpoint path. Four copies means four places
+  to fix if the URL format changes.
+  
+  Fix: Extract `buildLmstudioUrl(baseUrl, apiPath)` and reuse it.
+
+
+[DUP-02] HeadlessIpcBridge duplicated between main.js and docker-entry.js (REVISED)
+  Files: src/main/main.js:35-53, src/main/docker-entry.js:23-37
+  Both define a class with `handle()` and `invoke()` that wraps a Map.
+  REVISED ANALYSIS: The main.js version (IpcBridge) wraps the real ipcMain AND
+  stores handlers for local invocation. The docker-entry.js version (HeadlessIpcBridge)
+  is standalone with no ipcMain dependency. They have the same interface but different
+  implementations — one delegates to Electron, the other is self-contained.
+  Extracting a shared base class is still valid but lower priority since the
+  implementations are small (15-20 lines each) and serve different entry points.
+  Severity: LOW (minor duplication, not a bug)
+
+
+[DUP-03] SubtaskRuntime has massive private/non-private code duplication
+  File: src/main/subtask-runtime.js
+  Every lifecycle method (createRun, completeRun, failRun, cancelRun,
+  deliverToParent) has a `if (privateRun) { ...nearly identical code... }`
+  branch that copies 80% of the non-private logic. That's ~400 lines
+  of near-duplicate code across 5 methods.
+
+
+[DUP-04] Minimax/invoke XML cleanup regex duplicated
+  Both shared-utils.js:52-53 AND tool-chain-controller.js:108-110
+  have the same two regexes:
+    .replace(/<minimax:tool_call>[\s\S]*?<\/minimax:tool_call>/gi, '')
+    .replace(/<invoke\s+name\s*=\s*["'][^"']+["'][^>]*>[\s\S]*?<\/invoke>/gi, '')
+
+
+[DUP-05] markUserActive/markUserIdle pattern
+  The send-message handler (register-chat-data-handlers.js:694-696, 779-781)
+  and interpret-tool-result handler (lines 792-794) have the exact same
+  activity tracking preamble:
+    if (!isTestSession && !isPrivateSession) {
+        markUserActive(activitySessionId);
+    }
+  And finally block. Extract into a wrapper.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 4. TEST COVERAGE GAPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Current state: 77 contract tests in tests/contracts/ + 24 tool tests in tools/.
+The contract tests are well-structured but the coverage has gaps:
+
+[TEST-01] No test for database.js CRUD correctness
+  The database-runtime-contract.test.js is only 400 bytes — likely just checks
+  the module loads. There are NO tests for:
+    - getConversations (especially the limit bug — BUG-03)
+    - addConversation with metadata serialization
+    - updateCustomTool (the code/input_schema bug — BUG-07)
+    - setAPIKey / getAPIKey encryption round-trip
+    - enqueueMemoryJob deduplication logic
+    - claimNextMemoryJob transaction correctness
+    - failMemoryJob retry/max-attempts logic
+    - getCurrentSession auto-creation fallback
+    - deleteAllConversations cascade
+
+[TEST-02] No test for the 3 stripToolPatterns implementations
+  The tool-chain-controller-contract.test.js exists (8.8KB) but only tests
+  the chaining logic. The 3 different strip implementations (BUG-01) are
+  never compared against each other. Need:
+    - Nested brace test: TOOL:run_command{"cmd":"echo {x}"}
+    - Unicode content test
+    - Malformed/unclosed JSON test
+    - Minimax XML format test
+    - Test that all 3 implementations give the same result
+
+[TEST-03] No test for ConnectorRuntime
+  No contract test exists for connector lifecycle (start, stop, worker
+  message handling, RPC dispatch, startup timeout). This is code that
+  spawns worker threads and has complex message passing.
+
+[TEST-04] No test for BackgroundMemoryDaemon
+  background-memory-daemon-*-contract tests exist (3 files) but they're
+  small (1.1KB, 2.5KB, 1.6KB). The daemon has complex logic:
+    - Escalating tick intervals
+    - Resource gate checking
+    - User activity deferral
+    - Job queue draining
+    - LLM-driven task selection
+    - State persistence
+  Most of this is untested.
+
+[TEST-05] No test for BackendEventBus inference dispatch
+  No test verifies that events with `needsInference: true` actually
+  reach the LLM and that the silent/notify decision works.
+
+[TEST-06] No test for InferenceDispatcher lane-based scheduling
+  The inference-concurrency-contract.test.js (5.6KB) exists but the
+  actual `_executeScheduled` queue chaining logic — which is the most
+  critical concurrency primitive — needs edge case tests:
+    - Two parallel calls to the same lane
+    - Error in one queued call doesn't block the next
+    - Lane cleanup when the last promise settles
+
+[TEST-07] No integration test for send-message end-to-end
+  The full send-message flow (IPC → history load → dispatch → chain
+  controller → tool execution → persist response) is the core user
+  feature but has no end-to-end test with a mocked LLM. The
+  test-ipc-flow-mocked.js exists but is a tool/ script, not a
+  proper test.
+
+[TEST-08] No test for agent deletion cascade (BUG-02)
+  No test verifies that deleting an agent cleans up:
+    - Agent folder
+    - Agent sessions
+    - Subagent runs
+    - Tool permission profile
+
+[TEST-09] No test for PluginManager managed process lifecycle
+  plugin-lifecycle-contract.test.js exists (7.3KB) but managed process
+  registration, the SIGTERM→SIGKILL sequence, and the emergency hooks
+  are not covered.
+
+[TEST-10] Test runner is custom, not a standard framework
+  File: tests/run-suite.js + tests/helpers/assert.js
+  The project uses a hand-rolled test runner with a custom assert module.
+  This means:
+    - No parallel test execution
+    - No test filtering/grep
+    - No watch mode
+    - No coverage reporting
+    - No snapshot testing
+    - No mocking utilities beyond manual stubs
+  
+  The 77 contract tests and 24 tool tests would benefit from migration
+  to vitest or jest for better DX and CI integration.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 5. SYNTAX & STYLE INCONSISTENCIES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[STYLE-01] Mixed line endings within single files
+  Files like database.js, tool-chain-controller.js, connector-runtime.js
+  have mixed CRLF (\r\n) and LF (\n) within the same file. Often the
+  original code is CRLF and later additions are LF. This creates noisy
+  diffs and can cause issues with some tools.
+  Fix: Add .editorconfig and .gitattributes, then normalize.
+
+[STYLE-02] Inconsistent indentation in mcp-server.js
+  File: src/main/mcp-server.js:99-101
+    setSessionWorkspace(sessionWorkspace) {
+      this._sessionWorkspace = sessionWorkspace;    // ← 6-space indent
+    }
+  While every other method in the class uses 4-space indent. This is
+  visually jarring in the middle of the file.
+
+[STYLE-03] Inconsistent error return patterns
+  Across IPC handlers, errors are returned in 3 different formats:
+    1. return { error: 'message' }                    // agent-memory handlers
+    2. return { success: false, error: 'message' }    // task-queue handlers
+    3. throw error                                    // agent CRUD handlers
+  
+  The renderer has to handle all 3 patterns. This is a maintenance hazard.
+  Fix: Pick ONE error contract and apply it everywhere.
+
+[STYLE-04] console.log left in production-facing IPC handlers
+  File: src/main/ipc/register-tools-capability-handlers.js:24-27
+    ipcMain.handle('activate-tool-group', async (event, groupId) => {
+        console.log('[IPC] activate-tool-group called with:', groupId);
+        // ...
+        console.log('[IPC] Group activated successfully:', result);
+    });
+  File: src/main/ipc/register-llm-handlers.js:418
+    console.log('llm:get-models called with provider:', provider, ...);
+  File: register-llm-handlers.js:472
+    console.log('Saving config:', nextConfig);  // logs entire config object
+  
+  These log on every user interaction. In production this creates a lot
+  of noise and potentially leaks config data to the console.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 6. THINGS THAT LOOK WRONG BUT AREN'T (no action needed)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[OK-01] maxChainSteps = Number.POSITIVE_INFINITY
+  Looks scary but _resolveMaxChainSteps() checks DB setting first and
+  only falls through to this if the setting is missing. In practice,
+  the setting is always present after baseinit. Acceptable for now.
+
+[OK-02] Connector startup timeout (30s) calling reject after worker may resolve
+  The timeout in connector-runtime.js:180-188 races with the 'started'
+  message. This is fine because Promise can only settle once — the second
+  resolve/reject is silently ignored. Not ideal but not a bug.
+
+[OK-03] assertInside() for agent file operations
+  The path traversal check in register-agent-system-handlers.js:6-13
+  looks like overprotection but is actually necessary — the renderer
+  sends user-provided relativePath strings.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Bugs:              8  (real issues that cause wrong behavior)
+  Overprotection:   10  (redundant code, dead params, duplicate methods)
+  Duplication:       5  (copy-paste code that should be shared)
+  Test gaps:        10  (untested critical paths)
+  Style issues:      4  (consistency problems)
+  ─────────────────────
+  TOTAL:            37
+
+  TOP 5 to fix first:
+    1. BUG-01  Three stripToolPatterns → unify to one (prevents tool call leaks)
+    2. BUG-07  updateCustomTool drops code/schema edits (data loss on restart)
+    3. BUG-03  getConversations ignores limit (memory bloat on long sessions)
+    4. BUG-02  deleteAgent doesn't cleanup (orphaned data accumulates)
+    5. TEST-01 No DB CRUD tests (these bugs would've been caught)
+
+================================================================================

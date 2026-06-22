@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { buildRuntimePaths } = require('./runtime-paths');
 
 /**
  * KnowledgeManager — Manages the agentin/knowledge/ file tree.
@@ -15,7 +16,7 @@ const path = require('path');
 class KnowledgeManager {
     constructor(db, options = {}) {
         this.db = db;
-        this.baseDir = options.baseDir || path.join(__dirname, '../../agentin/knowledge');
+        this.baseDir = options.baseDir || buildRuntimePaths(options).knowledgeBaseDir;
         this.libraryDir = path.join(this.baseDir, 'library');
         this.stagingDir = path.join(this.baseDir, 'staging');
         this.MAX_LINES = 200;

@@ -20,6 +20,19 @@ class PortListenerManager extends EventEmitter {
         this.requestTimeout = 60000; // 60 seconds
     }
 
+    getAllowedCorsOrigin(origin) {
+        if (!origin) return '';
+        try {
+            const parsed = new URL(origin);
+            const host = parsed.hostname.toLowerCase();
+            if ((parsed.protocol === 'http:' || parsed.protocol === 'https:')
+                && (host === 'localhost' || host === '127.0.0.1' || host === '::1')) {
+                return origin;
+            }
+        } catch (_) {}
+        return '';
+    }
+
     /**
      * Register a new port listener
      * @param {Object} config - Listener configuration
@@ -69,8 +82,11 @@ class PortListenerManager extends EventEmitter {
     async handleRequest(req, res, config) {
         const { name, promptTemplate, method } = config;
 
-        // CORS headers for local development
-        res.setHeader('Access-Control-Allow-Origin', 'http://localhost:*');
+        const allowedOrigin = this.getAllowedCorsOrigin(req.headers.origin);
+        if (allowedOrigin) {
+            res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+            res.setHeader('Vary', 'Origin');
+        }
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
@@ -136,11 +152,25 @@ class PortListenerManager extends EventEmitter {
         return new Promise((resolve, reject) => {
             let body = '';
             let size = 0;
+            let settled = false;
+            let timer = null;
+
+            const settle = (ok, value) => {
+                if (settled) return;
+                settled = true;
+                if (timer) clearTimeout(timer);
+                if (ok) {
+                    resolve(value);
+                } else {
+                    reject(value);
+                }
+            };
 
             req.on('data', chunk => {
+                if (settled) return;
                 size += chunk.length;
                 if (size > this.maxRequestSize) {
-                    reject(new Error(`Request body exceeds maximum size of ${this.maxRequestSize} bytes`));
+                    settle(false, new Error(`Request body exceeds maximum size of ${this.maxRequestSize} bytes`));
                     req.destroy();
                     return;
                 }
@@ -150,20 +180,19 @@ class PortListenerManager extends EventEmitter {
             req.on('end', () => {
                 try {
                     if (body && req.headers['content-type']?.includes('application/json')) {
-                        resolve(JSON.parse(body));
+                        settle(true, JSON.parse(body));
                     } else {
-                        resolve(body || {});
+                        settle(true, body || {});
                     }
                 } catch (error) {
-                    resolve(body); // Return raw string if not valid JSON
+                    settle(true, body); // Return raw string if not valid JSON
                 }
             });
 
-            req.on('error', reject);
+            req.on('error', error => settle(false, error));
 
-            // Timeout
-            setTimeout(() => {
-                reject(new Error('Request timeout'));
+            timer = setTimeout(() => {
+                settle(false, new Error('Request timeout'));
                 req.destroy();
             }, this.requestTimeout);
         });

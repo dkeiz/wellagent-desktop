@@ -20,10 +20,14 @@ module.exports = {
   async run({ assert, rootDir }) {
     const htmlPath = path.join(rootDir, 'src', 'renderer', 'index.html');
     const apiProviderPath = path.join(rootDir, 'src', 'renderer', 'components', 'api-provider-settings.js');
+    const apiProviderHelpersPath = path.join(rootDir, 'src', 'renderer', 'components', 'api-provider-settings-helpers.js');
     const mainPanelPath = path.join(rootDir, 'src', 'renderer', 'components', 'main-panel.js');
     const apiStylesPath = path.join(rootDir, 'src', 'renderer', 'styles', 'api-provider-settings.css');
     const html = fs.readFileSync(htmlPath, 'utf8');
-    const apiProviderSource = fs.readFileSync(apiProviderPath, 'utf8');
+    const apiProviderSource = [
+      fs.readFileSync(apiProviderPath, 'utf8'),
+      fs.readFileSync(apiProviderHelpersPath, 'utf8')
+    ].join('\n');
     const mainPanelSource = fs.readFileSync(mainPanelPath, 'utf8');
     const apiStyles = fs.readFileSync(apiStylesPath, 'utf8');
 

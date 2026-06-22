@@ -1,5 +1,5 @@
-const fetch = require('node-fetch');
 const lruCache = require('lru-cache');
+const { localProbeFetch } = require('./network-policy');
 
 // Cache models for 5 minutes
 const modelCache = new lruCache({
@@ -16,7 +16,10 @@ class OllamaService {
 
   async checkConnection() {
     try {
-      const response = await fetch(this.baseURL, { method: 'HEAD', timeout: 3000 });
+      const response = await localProbeFetch(this.baseURL, { method: 'HEAD' }, {
+        label: 'Ollama connection probe',
+        timeoutMs: 3000
+      });
       return response.ok;
     } catch (error) {
       return false;
@@ -29,7 +32,10 @@ class OllamaService {
     if (cached) return cached;
 
     try {
-      const response = await fetch(`${this.baseURL}/api/tags`);
+      const response = await localProbeFetch(`${this.baseURL}/api/tags`, {}, {
+        label: 'Ollama model list',
+        timeoutMs: 5000
+      });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       
       const data = await response.json();

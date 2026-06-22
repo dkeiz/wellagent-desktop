@@ -3,12 +3,22 @@ const {
   normalizeTtsSpeakResult,
   normalizeTtsVoices
 } = require('./plugin-capability-contracts');
+const ttsTextUtils = require('../renderer/components/tts-text-utils');
 
 class TtsService {
   constructor({ db, pluginManager, agentManager }) {
     this.db = db;
     this.pluginManager = pluginManager;
     this.agentManager = agentManager;
+  }
+
+  _trace(event, details = {}) {
+    if (process.env.LOCALAGENT_TTS_TRACE !== '1') return;
+    try {
+      console.log(`[TtsService] ${JSON.stringify({ event, ...details })}`);
+    } catch (_) {
+      console.log(`[TtsService] ${event}`);
+    }
   }
 
   _bool(value, fallback = false) {
@@ -25,17 +35,39 @@ class TtsService {
   async getSettings() {
     return {
       defaultPluginId: await this.db.getSetting('tts.defaultPluginId') || '',
-      provider: await this.db.getSetting('tts.provider') || 'browser',
-      voice: await this.db.getSetting('tts.voice') || '',
-      voiceDescription: await this.db.getSetting('tts.voiceDescription') || '',
       speed: this._number(await this.db.getSetting('tts.speed'), 1),
       autoSpeak: this._bool(await this.db.getSetting('tts.autoSpeak'), false),
       autoSpeakMode: await this.db.getSetting('tts.autoSpeakMode') || 'answer'
     };
   }
 
+  _prepareText(params = {}, settings = {}) {
+    const source = String(params.rawText ?? params.text ?? '').trim();
+    if (!source) return '';
+    if (params.prepareText !== true) return source;
+    return ttsTextUtils.extractSpeakableText(
+      source,
+      params.mode || settings.autoSpeakMode || 'answer'
+    );
+  }
+
+  async _buildSpeakPayload(params, settings, text) {
+    const agent = await this._getAgentInfo(params.agentId);
+    return {
+      text,
+      rawText: params.rawText ?? params.text ?? '',
+      sessionId: params.sessionId || null,
+      agentId: params.agentId || null,
+      source: params.source || '',
+      mode: params.mode || settings.autoSpeakMode || 'answer',
+      speed: params.speed || settings.speed,
+      agent,
+      includeBase64: params.includeBase64 !== false
+    };
+  }
+
   async saveSettings(settings = {}) {
-    const allowed = ['defaultPluginId', 'provider', 'voice', 'voiceDescription', 'speed', 'autoSpeak', 'autoSpeakMode'];
+    const allowed = ['defaultPluginId', 'speed', 'autoSpeak', 'autoSpeakMode'];
     for (const key of allowed) {
       if (settings[key] !== undefined) {
         await this.db.saveSetting(`tts.${key}`, String(settings[key]));
@@ -48,9 +80,14 @@ class TtsService {
     return getCapabilityContract('tts');
   }
 
+  _isEnabledProvider(provider) {
+    return String(provider?.status || '').trim().toLowerCase() === 'enabled';
+  }
+
   listProviders({ enabledOnly = true } = {}) {
     if (!this.pluginManager?.getPluginsByCapability) return [];
     return this.pluginManager.getPluginsByCapability('tts', { enabledOnly })
+      .filter(provider => !enabledOnly || this._isEnabledProvider(provider))
       .map(provider => ({ ...provider, contract: provider.contract || this.getContract() }));
   }
 
@@ -66,6 +103,14 @@ class TtsService {
     }
 
     return providers[0]?.id || '';
+  }
+
+  _resolveSelectedPluginId(settings = {}) {
+    const providers = this.listProviders({ enabledOnly: true });
+    if (settings.defaultPluginId && providers.some(provider => provider.id === settings.defaultPluginId)) {
+      return settings.defaultPluginId;
+    }
+    return '';
   }
 
   async _getAgentInfo(agentId) {
@@ -102,16 +147,15 @@ class TtsService {
     if (!pluginId) return { success: false, error: 'No enabled TTS plugin' };
 
     const settings = await this.getSettings();
-    const provider = params.provider || settings.provider;
     const agent = await this._getAgentInfo(params.agentId);
     const payload = {
-      ...params,
       text,
-      provider,
-      voice: params.voice || settings.voice,
-      style: params.style !== undefined ? params.style : (provider === 'fast-qwen' ? settings.voiceDescription : ''),
+      rawText: params.rawText ?? params.text ?? '',
+      sessionId: params.sessionId || null,
+      agentId: params.agentId || null,
+      source: params.source || '',
+      mode: params.mode || settings.autoSpeakMode || 'answer',
       speed: params.speed || settings.speed,
-      settings,
       agent
     };
 
@@ -122,6 +166,45 @@ class TtsService {
     } catch (error) {
       return { success: false, pluginId, error: error.message };
     }
+  }
+
+  async speakAudio(params = {}) {
+    const settings = await this.getSettings();
+    const text = this._prepareText(params, settings);
+    if (!text) return { success: false, error: 'Text is required' };
+
+    const pluginId = this._resolveSelectedPluginId(settings);
+    if (pluginId && this.pluginManager?.runPluginAction) {
+      try {
+        const payload = await this._buildSpeakPayload(params, settings, text);
+        this._trace('plugin.speak.begin', { pluginId, textLength: text.length });
+        const result = await this.pluginManager.runPluginAction(pluginId, 'speak', payload);
+        this._trace('plugin.speak.ok', { pluginId });
+        const normalized = normalizeTtsSpeakResult(result);
+        return { success: normalized.ok, backend: 'plugin-tts', pluginId, result: normalized };
+      } catch (error) {
+        this._trace('plugin.speak.error', { pluginId, error: error.message || String(error) });
+        return { success: false, backend: 'plugin-tts', pluginId, error: error.message };
+      }
+    }
+
+    /**
+     * Embedded voice backend was removed as a fallback.
+     * It previously hardcoded fast-qwen, bypassing the user's plugin selection.
+     * When no plugin is enabled, the companion must generate audio via its
+     * own browser speechSynthesis. Text is cleaned here — same single point
+     * (ttsTextUtils.extractSpeakableText) used by both Electron and companion.
+     */
+    const rawText = String(params.rawText ?? params.text ?? '').trim();
+    const mode = params.mode || settings.autoSpeakMode || 'answer';
+    const speakText = ttsTextUtils.extractSpeakableText(rawText, mode);
+    return {
+      success: false,
+      backend: 'browser-tts',
+      fallback: 'browser-tts',
+      speakText: speakText || rawText,
+      error: 'No TTS plugin enabled. Use browser speechSynthesis.'
+    };
   }
 
   async stop(params = {}) {

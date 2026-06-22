@@ -1,5 +1,6 @@
 const axios = require('axios');
 const BaseAdapter = require('./base-adapter');
+const { isProviderRequestCanceled, providerRequest } = require('./provider-http');
 
 /**
  * QwenAdapter — Qwen/DashScope API + CLI mode.
@@ -33,48 +34,50 @@ class QwenAdapter extends BaseAdapter {
     }
 
     async _callAPI(messages, options, mode = 'api') {
-        const signal = this._startRequest();
-        let apiKey = await this.db.getAPIKey('qwen') || await this.db.getSetting('llm.qwen.apiKey');
-        const useOAuth = mode === 'oauth' || (await this.db.getSetting('llm.qwen.useOAuth')) === 'true';
+        const { requestId, signal } = this._startRequest();
+        try {
+            let apiKey = await this.db.getAPIKey('qwen') || await this.db.getSetting('llm.qwen.apiKey');
+            const useOAuth = mode === 'oauth' || (await this.db.getSetting('llm.qwen.useOAuth')) === 'true';
 
-        if (useOAuth) {
-            apiKey = await this._getApiKeyFromOAuth();
-        }
+            if (useOAuth) {
+                apiKey = await this._getApiKeyFromOAuth();
+            }
 
-        if (!apiKey) throw new Error('Qwen API key not configured');
+            if (!apiKey) throw new Error('Qwen API key not configured');
 
-        const runtimeConfig = options.runtimeConfig || {};
-        const reasoningConfig = runtimeConfig.reasoning || {};
-        const reasoningCaps = options.modelSpec?.capabilities?.reasoning || {};
-        const processedMessages = this._applyThinkingMode(messages, options.thinkingMode, reasoningCaps, mode);
+            const runtimeConfig = options.runtimeConfig || {};
+            const reasoningConfig = runtimeConfig.reasoning || {};
+            const reasoningCaps = options.modelSpec?.capabilities?.reasoning || {};
+            const processedMessages = this._applyThinkingMode(messages, options.thinkingMode, reasoningCaps, mode);
 
-        const requestBody = {
-            model: options.model || 'qwen-turbo',
-            messages: processedMessages
-        };
-
-        if (reasoningCaps.parameterMode === 'qwen_enable_thinking' && reasoningCaps.supported) {
-            requestBody.parameters = {
-                result_format: 'message',
-                enable_thinking: reasoningConfig.enabled
+            const requestBody = {
+                model: options.model || 'qwen-turbo',
+                messages: processedMessages
             };
 
-            if (reasoningCaps.maxTokens && reasoningConfig.maxTokens) {
-                requestBody.parameters.thinking_budget = reasoningConfig.maxTokens;
-            }
-        }
+            if (reasoningCaps.parameterMode === 'qwen_enable_thinking' && reasoningCaps.supported) {
+                requestBody.parameters = {
+                    result_format: 'message',
+                    enable_thinking: reasoningConfig.enabled
+                };
 
-        try {
-            const response = await axios.post(this.baseURL, requestBody, {
+                if (reasoningCaps.maxTokens && reasoningConfig.maxTokens) {
+                    requestBody.parameters.thinking_budget = reasoningConfig.maxTokens;
+                }
+            }
+
+            const response = await providerRequest(axios, {
+                method: 'post',
+                url: this.baseURL,
+                data: requestBody,
                 signal,
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
                     'Content-Type': 'application/json'
-                },
-                timeout: 120000
-            });
+                }
+            }, { timeoutMs: 120000, label: 'Qwen generation' });
 
-            this._endRequest();
+            this._endRequest(requestId);
 
             const normalized = this._extractMessage(response.data);
 
@@ -82,49 +85,138 @@ class QwenAdapter extends BaseAdapter {
                 content: normalized.content,
                 reasoning: normalized.reasoning,
                 model: response.data.model || response.data.output?.model,
-                usage: response.data.usage || response.data.output?.usage
+                usage: response.data.usage || response.data.output?.usage,
+                context_length: runtimeConfig.contextWindow?.value || options.modelSpec?.runtime?.contextWindow?.value
             });
         } catch (error) {
-            this._endRequest();
+            this._endRequest(requestId);
 
-            if (axios.isCancel(error) || error.name === 'AbortError' || error.code === 'ERR_CANCELED') {
+            if (isProviderRequestCanceled(axios, error)) {
                 return this._normalizeResponse({
                     content: '[Generation stopped by user]',
                     model: options.model,
                     stopped: true
                 });
             }
-            console.error('[Qwen API] Error:', error.response?.data || error.message);
-            throw new Error(`Qwen API failed: ${error.response?.data?.error?.message || error.message}`);
+            const sourceError = error.cause || error;
+            console.error('[Qwen API] Error:', sourceError.response?.data || sourceError.message);
+            throw new Error(`Qwen API failed: ${sourceError.response?.data?.error?.message || sourceError.message}`);
         }
     }
 
     async _callCLI(messages, options) {
-        const { exec } = require('child_process');
         const processedMessages = this._applyThinkingMode(
             messages,
             options.thinkingMode,
             options.modelSpec?.capabilities?.reasoning || {},
             'cli'
         );
-        const lastMessage = processedMessages[processedMessages.length - 1].content;
-        const escapedMessage = String(lastMessage || '').replace(/"/g, '\\"');
-        const escapedModel = String(options.model || '').replace(/"/g, '\\"');
-        const modelArg = escapedModel && escapedModel !== 'qwen-cli' ? ` --model "${escapedModel}"` : '';
+        const prompt = this._formatMessagesForCli(processedMessages);
+        const model = String(options.model || '');
+        const args = [];
+        if (model && model !== 'qwen-cli') {
+            args.push('--model', model);
+        }
+        args.push(prompt);
 
-        return new Promise((resolve, reject) => {
-            exec(`qwen${modelArg} "${escapedMessage}"`, { timeout: 30000 }, (error, stdout, stderr) => {
-                if (error) {
-                    console.error('[Qwen CLI] Error:', error, stderr);
-                    return reject(new Error(`Qwen CLI failed: ${error.message || stderr}`));
+        const { requestId, signal } = this._startRequest();
+        let result;
+        try {
+            result = await this._runQwenCli(args, 30000, signal);
+        } finally {
+            this._endRequest(requestId);
+        }
+        if (result.stopped) {
+            return this._normalizeResponse({
+                content: '[Generation stopped by user]',
+                model: options.model || 'qwen-cli',
+                stopped: true
+            });
+        }
+        if (result.code !== 0) {
+            console.error('[Qwen CLI] Error:', result.error || result.stderr);
+            throw new Error(`Qwen CLI failed: ${result.error?.message || result.stderr || `exit code ${result.code}`}`);
+        }
+        return this._normalizeResponse({
+            content: result.stdout.trim(),
+            model: options.model || 'qwen-cli',
+            usage: { total_tokens: 0 }
+        });
+    }
+
+    _runQwenCli(args, timeoutMs, signal = null) {
+        const { spawn } = require('child_process');
+        if (signal?.aborted) {
+            return Promise.resolve({ stdout: '', stderr: '', code: 130, error: null, stopped: true });
+        }
+        return new Promise((resolve) => {
+            const command = this._getQwenCommand();
+            const child = spawn(command, args, {
+                shell: false,
+                windowsHide: true,
+                stdio: ['ignore', 'pipe', 'pipe']
+            });
+            let stdout = '';
+            let stderr = '';
+            let settled = false;
+            let timeout = null;
+            const finish = (payload) => {
+                if (settled) return;
+                settled = true;
+                if (timeout) clearTimeout(timeout);
+                if (signal?.removeEventListener) {
+                    signal.removeEventListener('abort', onAbort);
                 }
-                resolve(this._normalizeResponse({
-                    content: stdout.trim(),
-                    model: options.model || 'qwen-cli',
-                    usage: { total_tokens: 0 }
-                }));
+                resolve(payload);
+            };
+            const onAbort = () => {
+                try {
+                    child.kill();
+                } catch (_) {
+                }
+                finish({ stdout, stderr, code: 130, error: null, stopped: true });
+            };
+            if (signal?.addEventListener) {
+                signal.addEventListener('abort', onAbort, { once: true });
+            }
+            timeout = setTimeout(() => {
+                try {
+                    child.kill();
+                } catch (_) {
+                }
+                finish({
+                    stdout,
+                    stderr,
+                    code: 124,
+                    error: new Error(`Qwen CLI timed out after ${timeoutMs}ms`)
+                });
+            }, timeoutMs);
+
+            child.stdout.on('data', chunk => {
+                stdout += String(chunk);
+            });
+            child.stderr.on('data', chunk => {
+                stderr += String(chunk);
+            });
+            child.on('error', error => {
+                finish({ stdout, stderr, code: 1, error });
+            });
+            child.on('exit', code => {
+                finish({ stdout, stderr, code: Number(code || 0), error: null });
             });
         });
+    }
+
+    _formatMessagesForCli(messages = []) {
+        return messages.map(message => {
+            const role = String(message?.role || 'user').toUpperCase();
+            const content = this._coerceContent(message?.content);
+            return `${role}:\n${content}`;
+        }).join('\n\n');
+    }
+
+    _getQwenCommand() {
+        return process.platform === 'win32' ? 'qwen.cmd' : 'qwen';
     }
 
     async getModels(forceRefresh = false) {
@@ -180,10 +272,11 @@ class QwenAdapter extends BaseAdapter {
         const apiKey = await this.db.getAPIKey('qwen') || await this.db.getSetting('llm.qwen.apiKey');
         if (apiKey) {
             try {
-                const response = await axios.get('https://dashscope.aliyuncs.com/api/v1/models', {
-                    headers: { 'Authorization': `Bearer ${apiKey}` },
-                    timeout: 120000
-                });
+                const response = await providerRequest(axios, {
+                    method: 'get',
+                    url: 'https://dashscope.aliyuncs.com/api/v1/models',
+                    headers: { 'Authorization': `Bearer ${apiKey}` }
+                }, { timeoutMs: 120000, label: 'Qwen model list' });
                 const models = this._extractModelsFromApiResponse(response.data);
                 if (models.length > 0) {
                     return models;
@@ -199,10 +292,11 @@ class QwenAdapter extends BaseAdapter {
     async _fetchModelsOAuth() {
         const apiKey = await this._getApiKeyFromOAuth();
 
-        const response = await axios.get('https://dashscope.aliyuncs.com/api/v1/models', {
-            headers: { 'Authorization': `Bearer ${apiKey}` },
-            timeout: 120000
-        });
+        const response = await providerRequest(axios, {
+            method: 'get',
+            url: 'https://dashscope.aliyuncs.com/api/v1/models',
+            headers: { 'Authorization': `Bearer ${apiKey}` }
+        }, { timeoutMs: 120000, label: 'Qwen OAuth model list' });
 
         const models = this._extractModelsFromApiResponse(response.data);
         if (models.length === 0) throw new Error('Empty model list');
@@ -210,7 +304,14 @@ class QwenAdapter extends BaseAdapter {
     }
 
     async _getApiKeyFromOAuth() {
-        const oauthCredsStr = await this.db.getSetting('llm.qwen.oauthCreds');
+        let oauthCredsStr = await this.db.getCredential?.('llm.qwen.oauthCreds') || null;
+        if (!oauthCredsStr) {
+            oauthCredsStr = await this.db.getSetting('llm.qwen.oauthCreds');
+            if (oauthCredsStr && this.db.setCredential) {
+                await this.db.setCredential('llm.qwen.oauthCreds', oauthCredsStr);
+                await this.db.saveSetting?.('llm.qwen.oauthCreds', '');
+            }
+        }
         if (!oauthCredsStr) throw new Error('OAuth enabled but no credentials found');
 
         const oauthCreds = JSON.parse(oauthCredsStr);
@@ -218,10 +319,11 @@ class QwenAdapter extends BaseAdapter {
         if (!token) throw new Error('No access token available');
 
         // Get API key from OAuth token
-        const apiKeyResponse = await axios.get('https://portal.qwen.ai/api/v1/auth/api_key', {
-            headers: { 'Authorization': `Bearer ${token}` },
-            timeout: 120000
-        });
+        const apiKeyResponse = await providerRequest(axios, {
+            method: 'get',
+            url: 'https://portal.qwen.ai/api/v1/auth/api_key',
+            headers: { 'Authorization': `Bearer ${token}` }
+        }, { timeoutMs: 120000, label: 'Qwen OAuth API key exchange' });
 
         const apiKey = apiKeyResponse?.data?.api_key || apiKeyResponse?.data?.data?.api_key || apiKeyResponse?.data?.key;
         if (!apiKey) throw new Error('Failed to retrieve API key from OAuth');
@@ -243,25 +345,20 @@ class QwenAdapter extends BaseAdapter {
     }
 
     async _fetchModelsCLI() {
-        const { exec } = require('child_process');
-
         const argCandidates = [
-            'models',
-            'list-models',
-            'model list',
-            'list models',
-            '--models',
-            '--list-models'
+            ['models'],
+            ['list-models'],
+            ['model', 'list'],
+            ['list', 'models'],
+            ['--models'],
+            ['--list-models']
         ];
 
         for (const args of argCandidates) {
             try {
-                const text = await new Promise((resolve, reject) => {
-                    exec(`qwen ${args}`, { timeout: 8000 }, (error, stdout, stderr) => {
-                        if (error && !stdout && !stderr) return reject(error);
-                        resolve(`${stdout || ''}\n${stderr || ''}`.trim());
-                    });
-                });
+                const result = await this._runQwenCli(args, 8000);
+                if (result.error && !result.stdout && !result.stderr) throw result.error;
+                const text = `${result.stdout || ''}\n${result.stderr || ''}`.trim();
                 const parsed = this._parseModelsFromCliText(text);
                 if (parsed.length > 0) return parsed;
             } catch (_) {

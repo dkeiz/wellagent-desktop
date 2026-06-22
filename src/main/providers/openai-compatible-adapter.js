@@ -1,7 +1,10 @@
 const axios = require('axios');
 const BaseAdapter = require('./base-adapter');
+const { isProviderRequestCanceled, providerRequest } = require('./provider-http');
 
 const RESERVED_OVERRIDE_KEYS = new Set(['model', 'messages', 'stream']);
+const REQUEST_TIMEOUT_MS = 120000;
+const MODEL_LIST_TIMEOUT_MS = 15000;
 
 class OpenAICompatibleAdapter extends BaseAdapter {
     constructor(providerId, db, options = {}) {
@@ -15,9 +18,10 @@ class OpenAICompatibleAdapter extends BaseAdapter {
     }
 
     async call(messages, options = {}) {
-        const signal = this._startRequest();
+        const { requestId, signal } = this._startRequest();
         const runtimeConfig = options.runtimeConfig || {};
         const reasoningCaps = options.modelSpec?.capabilities?.reasoning || {};
+        const localParams = await this._getLocalParams();
         const processedMessages = this._applyThinkingMode(
             messages,
             options.thinkingMode,
@@ -26,40 +30,87 @@ class OpenAICompatibleAdapter extends BaseAdapter {
         );
 
         const requestBody = {
-            model: options.model || '',
+            model: localParams.modelOverride || options.model || '',
             messages: processedMessages,
             temperature: options.temperature ?? 0.7,
-            max_tokens: options.max_tokens ?? 1000,
             stream: false
         };
+        // CRITICAL WARNING: DO NOT hardcode a default max_tokens (like 1000) here or anywhere in this adapter!
+        // Capping output tokens by default restricts the model output length and truncates responses.
+        // Let the API provider / model config decide output limits by default unless options.max_tokens is explicitly provided.
+        if (options.max_tokens != null) {
+            requestBody.max_tokens = options.max_tokens;
+        }
+        this._applyPromptCacheHint(requestBody, options.promptCache);
 
+        this._applyLocalRequestParams(requestBody, localParams.modelArgs);
         this._applyReasoningConfig(requestBody, runtimeConfig, reasoningCaps);
         this._applyRequestOverrides(requestBody, runtimeConfig.requestOverrides);
 
+        // Anthropic Messages API uses a different format from OpenAI:
+        // - system must be a top-level field, not inside messages
+        // - max_tokens is required (not optional)
+        // - auth uses x-api-key header, not Bearer
+        if (this.providerId === 'anthropic') {
+            this._preprocessForAnthropicApi(requestBody);
+        }
+
         try {
-            const response = await axios.post(
-                this._buildEndpoint(await this._getBaseURL(), '/chat/completions'),
-                requestBody,
-                {
+            const endpointPath = this.providerId === 'anthropic' ? '/messages' : '/chat/completions';
+            const response = await providerRequest(axios, {
+                method: 'post',
+                url: this._buildEndpoint(await this._getBaseURL(localParams), endpointPath),
+                data: requestBody,
                     signal,
-                    headers: await this._getHeaders()
+                headers: await this._getHeaders(localParams)
+            }, { timeoutMs: REQUEST_TIMEOUT_MS, label: `${this.providerLabel} generation` });
+
+            this._endRequest(requestId);
+
+            let content = '';
+            let reasoning = '';
+            let usage = response.data?.usage;
+
+            if (this.providerId === 'anthropic') {
+                const contentBlocks = response.data?.content || [];
+                content = contentBlocks
+                    .filter(block => block.type === 'text')
+                    .map(block => block.text)
+                    .join('\n')
+                    .trim();
+                
+                reasoning = contentBlocks
+                    .filter(block => block.type === 'thinking')
+                    .map(block => block.thinking || block.text || '')
+                    .join('\n')
+                    .trim();
+
+                if (usage) {
+                    usage = {
+                        prompt_tokens: usage.input_tokens || 0,
+                        completion_tokens: usage.output_tokens || 0,
+                        total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
+                        cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+                        cache_creation_input_tokens: usage.cache_creation_input_tokens || 0
+                    };
                 }
-            );
+            } else {
+                const message = response.data?.choices?.[0]?.message || {};
+                content = this._coerceContent(message.content);
+                reasoning = this._extractReasoning(message, response.data);
+            }
 
-            this._endRequest();
-
-            const message = response.data?.choices?.[0]?.message || {};
             return this._normalizeResponse({
-                content: this._coerceContent(message.content),
-                reasoning: this._extractReasoning(message, response.data),
+                content,
+                reasoning,
                 model: response.data?.model || options.model || this.providerId,
-                usage: response.data?.usage,
+                usage,
                 context_length: runtimeConfig.contextWindow?.value || options.modelSpec?.runtime?.contextWindow?.value
             });
         } catch (error) {
-            this._endRequest();
+            this._endRequest(requestId);
 
-            if (axios.isCancel(error) || error.name === 'AbortError' || error.code === 'ERR_CANCELED') {
+            if (isProviderRequestCanceled(axios, error)) {
                 return this._normalizeResponse({
                     content: '[Generation stopped by user]',
                     model: options.model,
@@ -73,10 +124,12 @@ class OpenAICompatibleAdapter extends BaseAdapter {
 
     async getModels() {
         try {
-            const response = await axios.get(
-                this._buildEndpoint(await this._getBaseURL(), '/models'),
-                { headers: await this._getHeaders() }
-            );
+            const localParams = await this._getLocalParams();
+            const response = await providerRequest(axios, {
+                method: 'get',
+                url: this._buildEndpoint(await this._getBaseURL(localParams), '/models'),
+                headers: await this._getHeaders(localParams)
+            }, { timeoutMs: MODEL_LIST_TIMEOUT_MS, label: `${this.providerLabel} model list` });
             return this._extractModelIds(response.data);
         } catch (error) {
             console.error(`[${this.providerLabel}] Failed to fetch models:`, error.message);
@@ -84,13 +137,35 @@ class OpenAICompatibleAdapter extends BaseAdapter {
         }
     }
 
-    async _getBaseURL() {
+    _applyPromptCacheHint(requestBody, promptCache = null) {
+        if (!promptCache?.enabled) return;
+        const key = String(promptCache.key || '').trim();
+
+        // Real provider-side prompt caching is API-specific. OpenAI Chat
+        // Completions supports cache routing by stable prompt_cache_key, and
+        // then reports hits in usage.prompt_tokens_details.cached_tokens.
+        // Other OpenAI-compatible servers often reject unknown fields, so do
+        // not fake cache controls for them here.
+        if (this.providerId !== 'openai' || !key) return;
+
+        requestBody.prompt_cache_key = key.slice(0, 512);
+        if (promptCache.retention === '24h') {
+            requestBody.prompt_cache_retention = '24h';
+        }
+    }
+
+    async _getBaseURL(localParams = null) {
+        const params = localParams || await this._getLocalParams();
+        if (params.baseUrlOverride) {
+            return this._normalizeBaseURL(params.baseUrlOverride);
+        }
         const stored = await this.db.getSetting(`llm.${this.providerId}.url`);
         return this._normalizeBaseURL(stored || this.defaultBaseURL);
     }
 
-    async _getHeaders() {
-        const apiKey = await this.db.getAPIKey(this.providerId) || await this.db.getSetting(`llm.${this.providerId}.apiKey`);
+    async _getHeaders(localParams = null) {
+        const params = localParams || await this._getLocalParams();
+        const apiKey = params.apiKeyOverride || await this.db.getAPIKey(this.providerId) || await this.db.getSetting(`llm.${this.providerId}.apiKey`);
         if (!apiKey && !this.apiKeyOptional) {
             throw new Error(`${this.providerLabel} API key not configured`);
         }
@@ -101,10 +176,129 @@ class OpenAICompatibleAdapter extends BaseAdapter {
         };
 
         if (apiKey) {
-            headers.Authorization = `Bearer ${apiKey}`;
+            if (this.providerId === 'anthropic') {
+                // Anthropic uses x-api-key header, not Bearer token.
+                headers['x-api-key'] = apiKey;
+            } else {
+                headers.Authorization = `Bearer ${apiKey}`;
+            }
         }
 
         return headers;
+    }
+
+    async _getLocalParams() {
+        if (this.providerId !== 'local-openai') {
+            return { modelArgs: {}, serverArgs: {}, modelOverride: '', baseUrlOverride: '', apiKeyOverride: '' };
+        }
+
+        const modelParamsRaw = await this.db.getSetting(`llm.${this.providerId}.modelParams`);
+        const serverParamsRaw = await this.db.getSetting(`llm.${this.providerId}.serverParams`);
+        const modelArgs = this._parseCliLikeArgs(modelParamsRaw);
+        const serverArgs = this._parseCliLikeArgs(serverParamsRaw);
+
+        const modelOverride = String(
+            modelArgs.named.model
+            || modelArgs.named.model_id
+            || modelArgs.named.modelid
+            || ''
+        ).trim();
+        const baseUrlOverride = String(
+            serverArgs.named.url
+            || serverArgs.named.base_url
+            || serverArgs.named.baseurl
+            || serverArgs.named.address
+            || ''
+        ).trim();
+        const apiKeyOverride = String(
+            serverArgs.named.api_key
+            || serverArgs.named.apikey
+            || ''
+        ).trim();
+
+        return { modelArgs, serverArgs, modelOverride, baseUrlOverride, apiKeyOverride };
+    }
+
+    _parseCliLikeArgs(rawValue) {
+        const input = String(rawValue || '').replace(/\s+/g, ' ').trim();
+        const out = { named: {}, flags: [], positional: [] };
+        if (!input) return out;
+
+        const tokens = input.match(/"[^"]*"|'[^']*'|\S+/g) || [];
+        const unquote = (value) => String(value || '').replace(/^['"]|['"]$/g, '');
+        const normalizeKey = (value) => String(value || '').trim().replace(/^-+/, '').replace(/-/g, '_').toLowerCase();
+
+        for (let i = 0; i < tokens.length; i += 1) {
+            const token = tokens[i];
+            if (!token.startsWith('-')) {
+                out.positional.push(unquote(token));
+                continue;
+            }
+
+            const eqIndex = token.indexOf('=');
+            if (eqIndex > 0) {
+                const key = normalizeKey(token.slice(0, eqIndex));
+                const value = unquote(token.slice(eqIndex + 1));
+                if (key) out.named[key] = value;
+                continue;
+            }
+
+            const key = normalizeKey(token);
+            const next = tokens[i + 1];
+            if (next && !next.startsWith('-')) {
+                out.named[key] = unquote(next);
+                i += 1;
+            } else {
+                out.named[key] = true;
+                out.flags.push(key);
+            }
+        }
+
+        return out;
+    }
+
+    _parseMaybeNumber(value) {
+        if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+        if (typeof value !== 'string') return null;
+        if (!value.trim()) return null;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    _parseMaybeBoolean(value) {
+        if (typeof value === 'boolean') return value;
+        const normalized = String(value || '').trim().toLowerCase();
+        if (!normalized) return null;
+        if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+        if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+        return null;
+    }
+
+    _applyLocalRequestParams(requestBody, parsedArgs = {}) {
+        if (this.providerId !== 'local-openai') return;
+        const named = parsedArgs.named || {};
+
+        const numericKeys = ['temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty', 'max_tokens', 'min_tokens', 'seed', 'n'];
+        for (const key of numericKeys) {
+            if (!Object.prototype.hasOwnProperty.call(named, key)) continue;
+            const parsed = this._parseMaybeNumber(named[key]);
+            if (parsed !== null) requestBody[key] = parsed;
+        }
+
+        const booleanKeys = ['stream'];
+        for (const key of booleanKeys) {
+            if (!Object.prototype.hasOwnProperty.call(named, key)) continue;
+            const parsed = this._parseMaybeBoolean(named[key]);
+            if (parsed !== null) requestBody[key] = parsed;
+        }
+
+        for (const [key, value] of Object.entries(named)) {
+            if (key === 'model' || key === 'model_id' || key === 'modelid') continue;
+            if (key === 'url' || key === 'base_url' || key === 'baseurl' || key === 'address') continue;
+            if (key === 'api_key' || key === 'apikey') continue;
+            if (Object.prototype.hasOwnProperty.call(requestBody, key)) continue;
+            requestBody[key] = value;
+        }
     }
 
     _normalizeBaseURL(url) {
@@ -263,6 +457,41 @@ class OpenAICompatibleAdapter extends BaseAdapter {
             .filter(Boolean)
             .join('\n')
             .trim();
+    }
+
+    /**
+     * Preprocess request body for Anthropic's Messages API format.
+     * - Extracts system messages from the messages array into top-level `system` field
+     * - Ensures max_tokens is set (Anthropic requires it)
+     * - Uses `/messages` endpoint instead of `/chat/completions`
+     */
+    _preprocessForAnthropicApi(requestBody) {
+        // Extract system messages into top-level `system` parameter.
+        // Anthropic doesn't accept role:'system' in the messages array.
+        const messages = requestBody.messages || [];
+        const systemMessages = [];
+        const nonSystemMessages = [];
+        for (const msg of messages) {
+            if (msg.role === 'system') {
+                systemMessages.push(msg.content || '');
+            } else {
+                nonSystemMessages.push(msg);
+            }
+        }
+        if (systemMessages.length > 0) {
+            requestBody.system = systemMessages.join('\n\n');
+        }
+        requestBody.messages = nonSystemMessages;
+
+        // Anthropic requires max_tokens. If not provided, use a sensible default.
+        if (requestBody.max_tokens == null) {
+            requestBody.max_tokens = 8192;
+        }
+
+        // Anthropic uses `model` but doesn't use `temperature` outside 0-1 range.
+        if (requestBody.temperature != null) {
+            requestBody.temperature = Math.min(1, Math.max(0, requestBody.temperature));
+        }
     }
 }
 

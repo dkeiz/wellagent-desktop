@@ -15,7 +15,12 @@ module.exports = {
       assert.ok(spec.providers[providerId], `Expected provider registry entry for ${providerId}`);
     });
 
-    assert.equal(spec.providers.openai.label, 'OpenAI / ChatGPT API', 'Expected OpenAI provider label to reflect ChatGPT API positioning');
+    assert.equal(spec.providers.openai.label, 'OpenAI', 'Expected OpenAI provider label to stay concise in the selector');
+    assert.includes(
+      spec.providers.openai.description,
+      'Codex CLI subscription mode or OpenAI API key mode',
+      'Expected OpenAI provider description to cover both supported transports'
+    );
     assert.ok(
       spec.providers.openai.settings.connectionFields.some(field => field.id === 'apiKey'),
       'Expected OpenAI provider to require an API key field'

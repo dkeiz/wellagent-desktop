@@ -1,0 +1,8 @@
+{
+  "id": "agent-book-writer",
+  "name": "Book Writer Studio",
+  "version": "1.0.0",
+  "main": "main.js",
+  "description": "Book writing workspace — manage projects, outlines, characters, and chapter generation.",
+  "agentSlug": "book-writer"
+}

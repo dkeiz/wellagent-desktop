@@ -31,6 +31,16 @@ module.exports = {
       `Expected thinking + answer mode to keep both cleaned sections: ${thinkingAndAnswer}`
     );
 
+    const emotionMarker = utils.extractSpeakableText(
+      '<!-- emotion: thinking -->\nLet me check this carefully.',
+      'answer'
+    );
+    assert.equal(
+      emotionMarker,
+      'Let me check this carefully.',
+      `Expected TTS speech text to strip hidden emotion markers: ${emotionMarker}`
+    );
+
     const noisy = utils.normalizeSpeakText([
       '###########',
       '-----=====-----',

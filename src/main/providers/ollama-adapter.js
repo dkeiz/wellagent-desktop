@@ -1,6 +1,8 @@
 const axios = require('axios');
 const BaseAdapter = require('./base-adapter');
+const { isProviderRequestCanceled, providerRequest } = require('./provider-http');
 const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434';
+const REQUEST_TIMEOUT_MS = 120000;
 
 /**
  * OllamaAdapter — Ollama local + cloud model support.
@@ -14,7 +16,7 @@ class OllamaAdapter extends BaseAdapter {
     }
 
     async call(messages, options = {}) {
-        const signal = this._startRequest();
+        const { requestId, signal } = this._startRequest();
         const runtimeConfig = options.runtimeConfig || {};
         const contextLength = runtimeConfig.contextWindow?.value || options.modelSpec?.runtime?.contextWindow?.value || 8192;
 
@@ -41,12 +43,15 @@ class OllamaAdapter extends BaseAdapter {
 
         try {
             const baseURL = await this._getBaseURL();
-            const response = await axios.post(`${baseURL}/api/chat`, requestBody, {
+            const response = await providerRequest(axios, {
+                method: 'post',
+                url: `${baseURL}/api/chat`,
+                data: requestBody,
                 signal,
                 headers: await this._getHeaders()
-            });
+            }, { timeoutMs: REQUEST_TIMEOUT_MS, label: 'Ollama generation' });
 
-            this._endRequest();
+            this._endRequest(requestId);
             const message = response.data?.message || {};
             const content = this._coerceContent(message.content);
             const reasoning = this._coerceContent(
@@ -70,9 +75,9 @@ class OllamaAdapter extends BaseAdapter {
                 }
             });
         } catch (error) {
-            this._endRequest();
+            this._endRequest(requestId);
 
-            if (axios.isCancel(error) || error.name === 'AbortError' || error.code === 'ERR_CANCELED') {
+            if (isProviderRequestCanceled(axios, error)) {
                 return this._normalizeResponse({
                     content: '[Generation stopped by user]',
                     model: options.model,
@@ -86,10 +91,11 @@ class OllamaAdapter extends BaseAdapter {
     async getModels() {
         try {
             const baseURL = await this._getBaseURL();
-            const response = await axios.get(`${baseURL}/api/tags`, {
-                headers: await this._getHeaders(),
-                timeout: 15000
-            });
+            const response = await providerRequest(axios, {
+                method: 'get',
+                url: `${baseURL}/api/tags`,
+                headers: await this._getHeaders()
+            }, { timeoutMs: 15000, label: 'Ollama model list' });
             const models = Array.isArray(response.data?.models) ? response.data.models : [];
             return models
                 .map(entry => String(entry?.name || '').trim())

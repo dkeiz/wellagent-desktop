@@ -5,7 +5,7 @@ Thank you for your interest in contributing! This document will help you get sta
 ## 🚀 Getting Started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/localagent-desktop.git`
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/wellagent-desktop.git`
 3. Install dependencies: `npm install`
 4. Start the app: `npm start`
 5. Run tests: `npm run test:contracts`
@@ -14,7 +14,8 @@ Thank you for your interest in contributing! This document will help you get sta
 
 ### Read First
 - **[DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md)** — Full architecture reference, runtime model, and extension paths
-- **[MCP_TOOLS_GUIDE.md](MCP_TOOLS_GUIDE.md)** — Tool inventory and registration policy
+- **[docs/development/mcp-tools-guide.md](docs/development/mcp-tools-guide.md)** — Tool inventory and registration policy
+- **[docs/development/repository-map.md](docs/development/repository-map.md)** — Repo surfaces and package boundaries
 
 ### Code Style
 - **Vanilla JavaScript** — No TypeScript, no bundlers, no frameworks
@@ -120,3 +121,4 @@ Use GitHub Issues with the `feature` label:
 ## 📄 License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
+

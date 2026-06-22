@@ -15,7 +15,7 @@ class MessageFormatter {
         }
 
         if (role === 'assistant') {
-            messageDiv.innerHTML = this.renderAssistantContent(content, thinkingVisibility);
+            messageDiv.innerHTML = this.renderAssistantContent(this.stripEmotionDirectives(content), thinkingVisibility);
             this.hydrateDynamicContent(messageDiv);
             return;
         }
@@ -65,6 +65,13 @@ class MessageFormatter {
         return fragments.join('');
     }
 
+    stripEmotionDirectives(text) {
+        if (window.PixelEmotionProtocol?.stripEmotionDirectives) {
+            return window.PixelEmotionProtocol.stripEmotionDirectives(text);
+        }
+        return String(text || '').replace(/<!--\s*(?:emotion|mood)\s*(?::|=)\s*["']?[a-z][a-z0-9_-]*["']?\s*-->/gi, '').trim();
+    }
+
     renderMarkdown(text, options = {}) {
         const placeholders = [];
         const stash = (html) => {
@@ -103,13 +110,17 @@ class MessageFormatter {
         }
 
         content = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, url) => {
-            const safeUrl = this.sanitizeUrl(url, { allowFile: false, allowDataImage: false });
+            const safeUrl = this.sanitizeUrl(url, { allowFile: true, allowDataImage: false });
             if (!safeUrl) {
                 return this.escapeHtml(label);
             }
+            const viewerButton = this.isContentViewerUrl(safeUrl)
+                ? `<button class="msg-open-in-viewer" data-url="${this.escapeAttribute(safeUrl)}" title="Open in content viewer">📄</button>`
+                : '';
             return stash(
                 `<a href="${this.escapeAttribute(safeUrl)}" target="_blank" rel="noopener noreferrer">`
                 + `${this.escapeHtml(label)}</a>`
+                + viewerButton
             );
         });
 
@@ -284,6 +295,17 @@ class MessageFormatter {
             return parsed.toString();
         } catch (error) {
             return null;
+        }
+    }
+
+    isContentViewerUrl(url) {
+        const value = String(url || '').trim();
+        if (value.startsWith('file://')) return true;
+        try {
+            const protocol = new URL(value).protocol.toLowerCase();
+            return protocol === 'http:' || protocol === 'https:';
+        } catch {
+            return false;
         }
     }
 

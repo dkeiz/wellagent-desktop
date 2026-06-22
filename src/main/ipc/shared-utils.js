@@ -62,12 +62,17 @@ function buildAssistantContent(response, runtimeConfig = {}) {
   const reasoning = String(response?.reasoning || '').trim();
   const content = String(response?.content || '').trim();
   const visibility = runtimeConfig?.reasoning?.visibility || 'show';
+  const provider = String(response?.renderContext?.provider || '').toLowerCase();
+  const tps = Number(response?.tokens_per_second);
+  const tpsSuffix = (provider === 'lmstudio' && Number.isFinite(tps) && tps > 0)
+    ? `\n\n[t/s: ${tps.toFixed(1)}]`
+    : '';
 
   if (!reasoning || visibility === 'hide') {
-    return content;
+    return `${content}${tpsSuffix}`.trim();
   }
 
-  return `<think>${reasoning}</think>\n\n${content}`.trim();
+  return `<think>${reasoning}</think>\n\n${content}${tpsSuffix}`.trim();
 }
 
 module.exports = {

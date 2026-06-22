@@ -4,6 +4,7 @@
 */
 
 html[data-active-skin="design-d"] {
+    --skin-contract-id: design-d;
     --chat-session-bg: transparent;
     --chat-session-border: none;
     --chat-session-radius: 8px;
@@ -28,17 +29,15 @@ html[data-active-skin="design-d"] .sidebar,
 html[data-active-skin="design-d"] #left-sidebar {
     border-right: none !important;
     background: var(--skin-sidebar-bg) !important;
-    padding: 12px;
+    padding: inherit !important;
 }
 
 html[data-active-skin="design-d"] .widget-panel,
 html[data-active-skin="design-d"] #right-panel {
     border-left: none !important;
     background: var(--skin-sidebar-bg) !important;
-    /* User requested it can blend directly, so we use main-bg to let it blend, 
-       but wait, if it blends into main content, shouldn't it be --skin-main-bg?
-       Yes, let's make it the same as main-bg so it is truly borderless on the right! */
-    background: var(--skin-main-bg) !important;
+    /* Keep right panel visually distinct from chat column to avoid fake seam gap. */
+    padding-left: 0 !important;
 }
 
 html[data-active-skin="design-d"] .content-panel {
@@ -47,78 +46,56 @@ html[data-active-skin="design-d"] .content-panel {
 
 /* Chat Tabs Bar - keep separation from message pane */
 html[data-active-skin="design-d"] .chat-tabs-bar {
-    position: relative;
-    background: linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--skin-sidebar-bg), transparent 10%) 0%,
-        color-mix(in srgb, var(--skin-main-bg), transparent 8%) 100%
-    ) !important;
-    border-bottom: 1px solid color-mix(in srgb, var(--skin-text-main), transparent 90%) !important;
-    box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--skin-text-main), transparent 94%);
+    position: static;
+    background: var(--bg-secondary, #f0f0f0) !important;
+    border-bottom: none !important;
+    box-shadow: none !important;
 }
 
 html[data-active-skin="design-d"] .chat-tabs-bar::after {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: -1px;
-    height: 10px;
-    pointer-events: none;
-    background: linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--skin-text-main), transparent 97%) 0%,
-        transparent 100%
-    );
+    content: none !important;
 }
 
 html[data-active-skin="design-d"] .chat-tab {
-    border-radius: 14px !important;
-    border: 1px solid transparent !important;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0 !important;
+    border: none !important;
     background: transparent !important;
 }
 
 html[data-active-skin="design-d"] .chat-tab:hover {
     background: color-mix(in srgb, var(--skin-hover-bg), transparent 30%) !important;
-    border-color: color-mix(in srgb, var(--skin-text-main), transparent 88%) !important;
 }
 
 html[data-active-skin="design-d"] .chat-tab.active {
-    background: linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--skin-input-bg), transparent 8%) 0%,
-        color-mix(in srgb, var(--skin-main-bg), var(--skin-input-bg) 34%) 100%
-    ) !important;
-    border-color: color-mix(in srgb, var(--skin-text-main), transparent 86%) !important;
-    box-shadow: 0 3px 10px color-mix(in srgb, var(--skin-text-main), transparent 94%) !important;
+    background: var(--card-bg, #fff) !important;
+    box-shadow: none !important;
 }
 
 html[data-active-skin="design-d"] .chat-tab-new {
-    border-radius: 12px !important;
-    border-style: solid !important;
-    border-color: color-mix(in srgb, var(--skin-text-main), transparent 86%) !important;
-    background: color-mix(in srgb, var(--skin-main-bg), var(--skin-input-bg) 20%) !important;
+    border-radius: var(--radius-sm) !important;
+    border: none !important;
+    background: var(--bg-secondary, #f0f0f0) !important;
 }
 
 /* Input Container - Floating Pill style */
 html[data-active-skin="design-d"] .input-container {
     border-top: none !important;
     background: transparent !important;
-    padding: 0 24px 0 24px !important;
+    padding: 0 !important;
 }
 
 html[data-active-skin="design-d"] .chat-input-row {
-    background: var(--skin-input-bg) !important;
-    border-radius: 24px !important;
-    padding: 12px 16px !important;
-    box-shadow: var(--skin-shadow-float) !important;
-    border: 1px solid var(--skin-border-light) !important;
+    background: transparent !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
 }
 
 html[data-active-skin="design-d"] #message-input {
-    border: none !important;
-    background: transparent !important;
-    border-radius: 0 !important;
+    border: 1px solid transparent !important;
+    background: var(--input-bg) !important;
+    border-radius: var(--radius-md) !important;
 }
 
 html[data-active-skin="design-d"] #message-input:focus {
@@ -136,7 +113,7 @@ html[data-active-skin="design-d"] .messages-container {
 }
 
 html[data-active-skin="design-d"] .message {
-    border-radius: 18px !important;
+    border-radius: var(--border-radius) !important;
 }
 
 html[data-active-skin="design-d"] .message.assistant {
@@ -154,20 +131,20 @@ html[data-active-skin="design-d"] .message.system {
 
 /* Buttons and accents */
 html[data-active-skin="design-d"] .primary-btn {
-    border-radius: 24px !important;
+    border-radius: var(--radius-md) !important;
     background: var(--skin-accent) !important;
     color: var(--skin-accent-text) !important;
     box-shadow: none !important;
 }
 
 html[data-active-skin="design-d"] .secondary-btn {
-    border-radius: 24px !important;
+    border-radius: var(--radius-md) !important;
     border: none !important;
     background: var(--skin-btn-bg) !important;
 }
 
 html[data-active-skin="design-d"] .nav-btn {
-    border-radius: 8px !important;
+    border-radius: var(--border-radius) !important;
 }
 
 html[data-active-skin="design-d"] .nav-btn.active {
@@ -227,14 +204,14 @@ html[data-active-skin="design-d"] .compact-select {
 html[data-active-skin="design-d"] .theme-picker {
     background: var(--skin-input-bg) !important;
     border: none !important;
-    border-radius: 24px !important;
-    padding: 4px !important;
+    border-radius: var(--radius-md) !important;
+    padding: 0 !important;
 }
 
 html[data-active-skin="design-d"] .theme-btn {
     border: none !important;
     background: transparent !important;
-    border-radius: 20px !important;
+    border-radius: var(--radius-sm) !important;
 }
 
 html[data-active-skin="design-d"] .theme-btn.active {
@@ -245,30 +222,142 @@ html[data-active-skin="design-d"] .theme-btn.active {
 
 html[data-active-skin="design-d"] .calendar-widget, 
 html[data-active-skin="design-d"] .agent-picker-widget, 
-html[data-active-skin="design-d"] .workflows-widget {
+html[data-active-skin="design-d"] .workflows-widget,
+html[data-active-skin="design-d"] .plugins-widget,
+html[data-active-skin="design-d"] .subagents-widget {
     border-color: transparent !important;
 }
 
 /* Keep Settings compact and consistent with non-pill controls */
 html[data-active-skin="design-d"] #settings-tab .settings-group {
-    gap: var(--space-2) !important;
-    padding: var(--space-3) !important;
+    gap: 0 !important;
+    padding: 0.42rem 0.56rem !important;
     border-radius: 8px !important;
 }
 
+html[data-active-skin="design-d"] #settings-tab .settings-group-title {
+    margin-bottom: 0.04rem !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .settings-line,
+html[data-active-skin="design-d"] #settings-tab .settings-group label.settings-line {
+    min-height: 1.55rem !important;
+    padding: 0.14rem 0 !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .settings-line-title {
+    font-size: 0.8rem !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .settings-line select,
+html[data-active-skin="design-d"] #settings-tab .settings-line input[type="text"],
+html[data-active-skin="design-d"] #settings-tab .settings-line input[type="number"] {
+    min-height: 1.68rem !important;
+    min-width: 120px !important;
+    max-width: 230px !important;
+    padding: 0 0.42rem !important;
+    font-size: 0.78rem !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .settings-line-slider {
+    grid-template-columns: minmax(110px, 1fr) minmax(120px, 240px) auto !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .settings-line-slider input[type="range"] {
+    width: min(240px, 100%) !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .theme-btn {
+    min-width: 50px !important;
+    min-height: 1.68rem !important;
+    padding: 0 0.34rem !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .theme-btn .theme-label {
+    font-size: 0.58rem !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .settings-value-chip,
+html[data-active-skin="design-d"] #settings-tab .settings-code-chip,
+html[data-active-skin="design-d"] #settings-tab .settings-subtle-value,
+html[data-active-skin="design-d"] #settings-tab .companion-mini-pill,
+html[data-active-skin="design-d"] #settings-tab .companion-inline-warning {
+    min-height: 1.32rem !important;
+    padding: 0 0.34rem !important;
+    font-size: 0.68rem !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .settings-inline-panel {
+    padding: 0.42rem !important;
+}
+
 html[data-active-skin="design-d"] #settings-tab .skin-action-row {
-    gap: var(--space-2) !important;
+    gap: 0.28rem !important;
 }
 
 html[data-active-skin="design-d"] #settings-tab .secondary-btn,
 html[data-active-skin="design-d"] #settings-tab .danger-btn,
 html[data-active-skin="design-d"] #settings-tab .primary-btn {
     border-radius: 8px !important;
-    min-height: var(--control-h-md) !important;
-    padding: 0 var(--space-3) !important;
+    min-height: 1.68rem !important;
+    padding: 0 0.46rem !important;
+    font-size: 0.76rem !important;
 }
 
 html[data-active-skin="design-d"] #settings-tab .danger-btn:hover,
 html[data-active-skin="design-d"] #settings-tab .danger-btn:active {
     transform: none !important;
+}
+
+/* Skin chooser in Settings should stay borderless too */
+html[data-active-skin="design-d"] #settings-tab .skin-card,
+html[data-active-skin="design-d"] #settings-tab .skin-preview,
+html[data-active-skin="design-d"] #settings-tab .skin-compat,
+html[data-active-skin="design-d"] #settings-tab .skin-theme-pill,
+html[data-active-skin="design-d"] #settings-tab .skin-diagnostics-output,
+html[data-active-skin="design-d"] #settings-tab .skin-picker-status {
+    border: none !important;
+    box-shadow: none !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .skin-manage-panel .skin-picker {
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)) !important;
+    gap: 0.2rem !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .skin-manage-panel .skin-card {
+    padding: 0.18rem 0.22rem !important;
+    background: color-mix(in srgb, var(--skin-hover-bg), transparent 18%) !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .skin-manage-panel .skin-name {
+    font-size: 0.66rem !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .skin-theme-pill {
+    min-height: 1.28rem !important;
+    padding: 0.06rem 0.34rem !important;
+    font-size: 0.64rem !important;
+    background: var(--skin-btn-bg) !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .skin-card:hover,
+html[data-active-skin="design-d"] #settings-tab .skin-card.active,
+html[data-active-skin="design-d"] #settings-tab .skin-card.drag-over {
+    border-color: transparent !important;
+    box-shadow: none !important;
+    background: color-mix(in srgb, var(--skin-btn-bg), transparent 12%) !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .companion-device-row {
+    gap: 0.28rem !important;
+    padding: 0.22rem 0.28rem !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .companion-device-summary strong {
+    font-size: 0.72rem !important;
+}
+
+html[data-active-skin="design-d"] #settings-tab .companion-device-summary span {
+    font-size: 0.62rem !important;
 }

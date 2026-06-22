@@ -5,6 +5,7 @@ const path = require('path');
 class MemoryDB {
   constructor() {
     this.settings = new Map();
+    this.apiKeys = new Map();
     this.plugins = new Map();
     this.knowledge = new Map();
   }
@@ -14,9 +15,23 @@ class MemoryDB {
       const id = args[0];
       const plugin = this.plugins.get(id);
       if (!plugin) return undefined;
+      if (sql.includes('SELECT id')) return {
+        id: plugin.id,
+        status: plugin.status,
+        visible_in_sidebar: plugin.visible_in_sidebar ?? 1
+      };
       if (sql.includes('SELECT status')) return { status: plugin.status };
-      if (sql.includes('SELECT id')) return { id: plugin.id };
       return plugin;
+    }
+
+    if (sql.includes('FROM api_keys')) {
+      const row = this.apiKeys.get(args[0]);
+      return row ? { ...row } : undefined;
+    }
+
+    if (sql.includes('FROM settings')) {
+      const value = this.settings.get(args[0]);
+      return value == null ? undefined : { value };
     }
 
     if (sql.includes('SELECT * FROM knowledge_items WHERE slug = ?')) {
@@ -60,7 +75,15 @@ class MemoryDB {
   run(sql, args = []) {
     if (sql.startsWith('INSERT INTO plugins')) {
       const [id, name, version, status] = args;
-      this.plugins.set(id, { id, name, version, status, error: null });
+      this.plugins.set(id, { id, name, version, status, visible_in_sidebar: 1, error: null });
+      return;
+    }
+
+    if (sql.startsWith('UPDATE plugins SET visible_in_sidebar')) {
+      const [visible, id] = args;
+      const plugin = this.plugins.get(id) || { id, name: id, version: '0.0.0', status: 'disabled', error: null };
+      plugin.visible_in_sidebar = visible;
+      this.plugins.set(id, plugin);
       return;
     }
 
@@ -75,6 +98,22 @@ class MemoryDB {
 
     if (sql.startsWith('INSERT OR REPLACE INTO settings')) {
       this.settings.set(args[0], String(args[1]));
+      return;
+    }
+
+    if (sql.startsWith('INSERT OR REPLACE INTO api_keys')) {
+      const [provider, key, encrypted] = args;
+      this.apiKeys.set(provider, { provider, key, encrypted });
+      return;
+    }
+
+    if (sql.startsWith('DELETE FROM api_keys')) {
+      this.apiKeys.delete(args[0]);
+      return;
+    }
+
+    if (sql.startsWith('DELETE FROM settings')) {
+      this.settings.delete(args[0]);
       return;
     }
 
@@ -150,6 +189,15 @@ class TestContainer {
 class PluginCapabilityStub {
   constructor() {
     this.safeTools = new Map();
+    this.mainEnabled = false;
+    this.groups = {
+      web: false,
+      unsafe: false,
+      files: 'off',
+      terminal: 'off',
+      memory: false,
+      ports: false
+    };
   }
 
   registerCustomTool(toolName, isSafe = false) {
@@ -170,8 +218,73 @@ class PluginCapabilityStub {
       .map(([toolName]) => toolName);
   }
 
+  isMainEnabled() {
+    return this.mainEnabled;
+  }
+
+  setMainEnabled(enabled) {
+    this.mainEnabled = enabled === true;
+    return this.mainEnabled;
+  }
+
+  setGroupEnabled(groupId, enabled) {
+    if (groupId === 'files') {
+      this.groups.files = enabled ? 'read' : 'off';
+    } else if (groupId === 'terminal') {
+      this.groups.terminal = enabled ? 'workspace' : 'off';
+    } else {
+      this.groups[groupId] = enabled === true;
+    }
+    return true;
+  }
+
+  isGroupEnabled(groupId) {
+    const val = this.groups[groupId];
+    return typeof val === 'string' ? val !== 'off' : val === true;
+  }
+
+  setFilesMode(mode) {
+    this.groups.files = mode;
+    return mode;
+  }
+
+  getFilesMode() {
+    return this.groups.files || 'off';
+  }
+
+  setTerminalMode(mode) {
+    this.groups.terminal = mode;
+    return mode;
+  }
+
+  getTerminalMode() {
+    return this.groups.terminal || 'off';
+  }
+
+  getState() {
+    return {
+      mainEnabled: this.mainEnabled,
+      groups: { ...this.groups },
+      activeToolCount: this.safeTools.size
+    };
+  }
+
   getGroupsConfig() {
-    return [];
+    return Object.entries(this.groups).map(([id, val]) => {
+      const isModeGroup = id === 'files' || id === 'terminal';
+      const enabled = isModeGroup ? val !== 'off' : val === true;
+      return {
+        id,
+        name: id.toUpperCase(),
+        description: `${id} capabilities`,
+        icon: '🔧',
+        enabled,
+        mode: isModeGroup ? val : undefined,
+        modes: isModeGroup ? (id === 'files' ? { off: [], read: ['read_file'], full: ['read_file', 'write_file'] } : { off: [], workspace: ['run_command'], system: ['run_command'] }) : undefined,
+        tools: [],
+        allTools: []
+      };
+    });
   }
 }
 
@@ -179,7 +292,12 @@ function makeTempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+function createDirLink(targetPath, linkPath) {
+  fs.symlinkSync(targetPath, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
 module.exports = {
+  createDirLink,
   MemoryDB,
   TestContainer,
   PluginCapabilityStub,

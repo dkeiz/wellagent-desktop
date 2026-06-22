@@ -1,0 +1,375 @@
+================================================================================
+INTEGRITY ISSUES — Git Hygiene, Exposed Files & Push Safety
+================================================================================
+Audit of tracked files, .gitignore coverage, and runtime data leaking into VCS.
+Goal: clean `git status` before pushes, no personal/runtime data in the repo.
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+CATEGORY 1 — COMPILED / CACHE FILES TRACKED IN GIT
+────────────────────────────────────────────────────────────────────────────────
+
+[INT-001] 13 PYTHON __pycache__/*.pyc FILES ARE TRACKED
+  Path: agentin/plugins/http-tts-bridge/python_backend/backend/__pycache__/
+        agentin/plugins/http-tts-bridge/python_backend/backend/routers/__pycache__/
+  These are compiled bytecode files that change on every Python run and are
+  machine-specific. They should never be in VCS.
+  Files:
+    __init__.cpython-311.pyc     app.cpython-311.pyc
+    catalog.cpython-311.pyc      config.cpython-311.pyc
+    models.cpython-311.pyc       stability.cpython-311.pyc
+    state.cpython-311.pyc        tts_engine.cpython-311.pyc
+    voice_cloner.cpython-311.pyc voice_preparer.cpython-311.pyc
+    routers/agent.cpython-311.pyc  routers/system.cpython-311.pyc
+    routers/voices.cpython-311.pyc
+
+  Fix — add to .gitignore and untrack:
+    # In .gitignore:
+    __pycache__/
+    *.pyc
+
+    # Then run:
+    git rm -r --cached agentin/plugins/http-tts-bridge/python_backend/backend/__pycache__/
+    git rm -r --cached agentin/plugins/http-tts-bridge/python_backend/backend/routers/__pycache__/
+
+
+────────────────────────────────────────────────────────────────────────────────
+CATEGORY 2 — RUNTIME-GENERATED DATA TRACKED IN GIT
+────────────────────────────────────────────────────────────────────────────────
+
+[INT-002] A2A EVENT LOGS AND TASK STATE — 21 files tracked
+  Path: agentin/a2a/events/*.jsonl  (9 files)
+        agentin/a2a/tasks/*.json    (9 files)
+        agentin/a2a/targets/*.json  (3 files: codex.json, comfyui.json, lmstudio.json)
+  The events/ and tasks/ directories contain runtime-generated session data with
+  UUIDs. These change every time A2A tasks run and will constantly dirty git status.
+  The targets/ files (codex.json, comfyui.json, lmstudio.json) may be intentional
+  config — decide if they're templates or runtime state.
+
+  Fix — add to .gitignore and untrack:
+    agentin/a2a/events/
+    agentin/a2a/tasks/
+    # If targets are also runtime-generated:
+    # agentin/a2a/targets/
+
+    git rm -r --cached agentin/a2a/events/
+    git rm -r --cached agentin/a2a/tasks/
+
+[INT-003] SUB-AGENT DEFINITIONS WITH TIMESTAMP IDs — 8 runtime sub-agents
+  Path: agentin/agents/sub/
+  Tracked files include runtime-spawned sub-agents with timestamp-based names:
+    diag-search-1776453748776/system.md
+    live-search-verifier-1776453564659/system.md
+    live-search-verifier-1776453628736/system.md
+    live-time-verifier-1776454130153/system.md
+    live-time-verifier-1776454985119/system.md
+    live-time-verifier-1776455978209/system.md
+    live-time-verifier-1776457715692/system.md
+  These are ephemeral sub-agents created during sessions. Each new run creates
+  new ones, dirtying git status. Only template sub-agents should be tracked
+  (live-subagent, outcome-agent, reminder-agent, search-agent).
+
+  Fix — add to .gitignore and untrack the timestamped ones:
+    # Ignore runtime-spawned sub-agents (contain timestamps in folder name)
+    agentin/agents/sub/diag-*/
+    agentin/agents/sub/live-search-verifier-*/
+    agentin/agents/sub/live-time-verifier-*/
+    # OR broader: ignore all sub-agents except templates
+    # agentin/agents/sub/*/
+    # !agentin/agents/sub/live-subagent/
+    # !agentin/agents/sub/outcome-agent/
+    # !agentin/agents/sub/reminder-agent/
+    # !agentin/agents/sub/search-agent/
+
+    git rm -r --cached agentin/agents/sub/diag-search-1776453748776/
+    git rm -r --cached agentin/agents/sub/live-search-verifier-*/
+    git rm -r --cached agentin/agents/sub/live-time-verifier-*/
+
+[INT-004] WORKFLOW DEFINITIONS — mixed template vs runtime
+  Path: agentin/workflows/
+  Tracked files:
+    live_workflow_test.json       ← runtime test artifact
+    morning_briefing.json         ← likely a template (keep)
+    quick_web_research.json       ← likely a template (keep)
+    system_health_check.json      ← likely a template (keep)
+    system_health_check_copy.json ← accidental copy/duplicate
+    workflow.md                   ← documentation (keep)
+    runs/.gitignore               ← correct
+
+  Fix:
+    - Delete system_health_check_copy.json (duplicate)
+    - Decide if live_workflow_test.json should be tracked or ignored
+    - If workflows are user-created at runtime, ignore *.json:
+      agentin/workflows/*.json
+      !agentin/workflows/morning_briefing.json
+      !agentin/workflows/quick_web_research.json
+      !agentin/workflows/system_health_check.json
+
+[INT-005] TASKS.MD — runtime task queue snapshot
+  Path: agentin/tasks/tasks.md
+  This appears to be a runtime-written file that the daemon updates with
+  current task state. It will change on every daemon tick and dirty git.
+
+  Fix:
+    agentin/tasks/
+
+
+────────────────────────────────────────────────────────────────────────────────
+CATEGORY 3 — AGENT RUNTIME STATE PARTIALLY IGNORED
+────────────────────────────────────────────────────────────────────────────────
+
+[INT-006] PRO AGENT state.json IGNORED BUT state.default.json TRACKED
+  .gitignore has:
+    agentin/agents/pro/*/config/state.json
+  But this file is tracked:
+    agentin/agents/pro/background-daemon/config/state.default.json
+  This is actually correct — state.default.json is a template, state.json is
+  runtime. No action needed, just documenting the pattern for clarity.
+  ✅ OK — no fix needed.
+
+[INT-007] PRO AGENT compact.md IGNORED, BUT system.md IS TRACKED
+  .gitignore has:
+    agentin/agents/pro/*/memory/compact.md
+  All pro agent system.md files are tracked (intentional — these are templates).
+  ✅ OK — no fix needed.
+
+[INT-008] PLUGIN STATE — PARTIAL COVERAGE
+  .gitignore has:
+    agentin/plugins/agent-rag-studio/data/state.json
+    agentin/plugins/http-tts-bridge/runtime/
+  But the RAG studio's data directory also contains:
+    agentin/plugins/agent-rag-studio/data/tech-support-menu-20.json  ← tracked
+  This looks like user-uploaded RAG dataset data. Should it be in VCS?
+  Also, no general rule for plugin runtime data exists — any new plugin that
+  writes to its own data/ or runtime/ directory will leak into git.
+
+  Fix — add general plugin runtime rules:
+    agentin/plugins/*/data/*.json
+    !agentin/plugins/*/data/state.default.json
+    agentin/plugins/*/runtime/
+
+
+────────────────────────────────────────────────────────────────────────────────
+CATEGORY 4 — KNOWLEDGE & SKILLS LEAKAGE
+────────────────────────────────────────────────────────────────────────────────
+
+[INT-009] KNOWLEDGE FILES — DAEMON-GENERATED CONTENT TRACKED
+  Path: agentin/knowledge/
+  Tracked files:
+    llm_rankings_2026.md                         ← daemon-generated
+    multiagent/foundation_architecture.md        ← daemon-generated
+    multiagent/foundation_tools_inventory.md     ← daemon-generated
+    multiagent/skill_monitoring_debugging.md     ← daemon-generated
+    multiagent/skill_permission_contracts.md     ← daemon-generated
+  The knowledge/library/ and knowledge/staging/ have .gitignore but the root
+  knowledge files and the multiagent/ subdirectory don't.
+  These are generated by the background memory daemon. Every daemon run can
+  create or modify these, dirtying git status.
+
+  Decision needed:
+    - If these are "shipped knowledge" that you curate → keep tracked
+    - If the daemon creates/updates them at runtime → ignore them:
+      agentin/knowledge/*.md
+      agentin/knowledge/multiagent/
+
+[INT-010] SKILLS FILES — AGENT-GENERATED CONTENT TRACKED
+  Path: agentin/skills/
+  16 tracked files including:
+    a2a-interoperability.md
+    full-power-guide.md
+    global-task-distributor.md
+    lightweight-tool-replacements.md
+    multiagent-*.md (4 files)
+    rag-dataset-workflow.md
+    searxng-plugin/SKILL.md
+    external-windowless-test/SKILL.md
+    artifacts-icon.svg
+  Some of these are daemon-generated skills. Same decision as INT-009:
+  if you curate them, keep; if the daemon writes them at runtime, ignore.
+
+  Fix (if runtime-generated):
+    agentin/skills/*.md
+    agentin/skills/*/
+
+
+────────────────────────────────────────────────────────────────────────────────
+CATEGORY 5 — .gitignore GAPS & MISSING RULES
+────────────────────────────────────────────────────────────────────────────────
+
+[INT-011] NO GLOBAL __pycache__ OR *.pyc RULE
+  .gitignore only covers specific paths. Python bytecode files are not globally
+  ignored. Any future Python plugin will leak .pyc files.
+
+  Fix:
+    __pycache__/
+    *.pyc
+    *.pyo
+
+[INT-012] NO RULE FOR agentin/a2a/
+  The entire A2A runtime directory (events, tasks, targets) is unmentioned
+  in .gitignore. See INT-002.
+
+[INT-013] NO RULE FOR agentin/tasks/
+  The tasks directory is runtime state. Not in .gitignore.
+
+[INT-014] NO RULE FOR RUNTIME SUB-AGENTS
+  agentin/agents/sub/ has no .gitignore coverage for runtime-spawned agents.
+  Only the template sub-agents should be tracked.
+
+[INT-015] ISSUE FILES THEMSELVES (code.issues, ui.issues, integrity.issues)
+  These audit files are currently showing as untracked:
+    ?? code.issues
+    ?? ui.issues
+  Decision: track them as project documentation, or ignore them.
+  If you want them private:
+    *.issues
+
+[INT-016] NO GLOBAL RULE FOR DEVELOPMENT ARTIFACTS
+  Files like *.issues, TODO.md, SCRATCH.*, etc. have no blanket ignore rule.
+  Add if you use them:
+    *.issues
+    SCRATCH.*
+    TODO.md
+
+
+────────────────────────────────────────────────────────────────────────────────
+CATEGORY 6 — SENSITIVE CONTENT EXPOSURE
+────────────────────────────────────────────────────────────────────────────────
+
+[INT-017] .env IS CORRECTLY IGNORED — BUT .env.example IS IDENTICAL
+  .env is in .gitignore ✅
+  .env.example is tracked and contains the same structure with empty values.
+  This is the correct pattern. However, verify that your actual .env file
+  hasn't been accidentally committed in the past:
+    git log --all --diff-filter=A --summary -- ".env"
+  Result: no .env commit found. ✅ Safe.
+
+[INT-018] TELEGRAM BOT TOKEN IN CONNECTOR FILES
+  Path: agentin/connectors/telegram-bot.js
+        agentin/connectors/telegram-relay.js
+  These files are tracked. Verify they don't contain hardcoded tokens.
+  The token should come from .env (TELEGRAM_BOT_TOKEN), not from the file.
+  If either file has a token value, it's exposed in git history forever.
+
+[INT-019] A2A TARGET CONFIGS MAY CONTAIN ENDPOINTS
+  Path: agentin/a2a/targets/codex.json
+        agentin/a2a/targets/comfyui.json
+        agentin/a2a/targets/lmstudio.json
+  These may contain local network addresses, ports, or API URLs that reveal
+  your infrastructure. Not a secret per se, but potentially sensitive.
+
+[INT-020] PLUGIN config.txt TRACKED
+  Path: agentin/plugins/http-tts-bridge/config.txt
+  If this contains local paths, ports, or any user-specific configuration,
+  it will be pushed. Check its contents.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CATEGORY 7 — GIT WORKFLOW RECOMMENDATIONS
+────────────────────────────────────────────────────────────────────────────────
+
+[INT-021] USE git rm --cached FOR ALREADY-TRACKED FILES
+  Adding a path to .gitignore does NOT untrack files already in the index.
+  You must run `git rm -r --cached <path>` first, then commit.
+  Do this for all files flagged in INT-001 through INT-005.
+
+[INT-022] CONSIDER A PRE-COMMIT HOOK
+  To prevent accidental commits of sensitive files, add a pre-commit hook:
+    .git/hooks/pre-commit:
+    #!/bin/sh
+    # Block commits containing .env, .db, .pyc, or pycache
+    if git diff --cached --name-only | grep -qE '\.env$|\.db$|\.pyc$|__pycache__'; then
+      echo "ERROR: Attempting to commit sensitive/generated files"
+      exit 1
+    fi
+
+[INT-023] CONSIDER .gitattributes FOR BINARY FILES
+  The artifacts-icon.svg and any future binary assets should have:
+    *.svg binary
+    *.png binary
+    *.ico binary
+  This prevents git from trying to merge/diff them as text.
+
+
+================================================================================
+RECOMMENDED .gitignore ADDITIONS (copy-paste block)
+================================================================================
+
+Paste this at the end of your current .gitignore:
+
+# ===== PYTHON BUILD ARTIFACTS =====
+__pycache__/
+*.pyc
+*.pyo
+
+# ===== A2A RUNTIME DATA =====
+agentin/a2a/events/
+agentin/a2a/tasks/
+# Uncomment if targets are also runtime-generated:
+# agentin/a2a/targets/
+
+# ===== RUNTIME SUB-AGENTS =====
+# Keep template sub-agents, ignore timestamped runtime ones
+agentin/agents/sub/diag-*/
+agentin/agents/sub/live-search-verifier-[0-9]*/
+agentin/agents/sub/live-time-verifier-[0-9]*/
+
+# ===== TASK QUEUE STATE =====
+agentin/tasks/
+
+# ===== PLUGIN RUNTIME DATA (general) =====
+agentin/plugins/*/runtime/
+# Uncomment to ignore all plugin data except defaults:
+# agentin/plugins/*/data/*.json
+# !agentin/plugins/*/data/state.default.json
+
+# ===== AUDIT/ISSUE FILES (optional) =====
+# *.issues
+
+
+================================================================================
+CLEANUP COMMANDS (run once after updating .gitignore)
+================================================================================
+
+  # 1. Remove tracked __pycache__ files
+  git rm -r --cached agentin/plugins/http-tts-bridge/python_backend/backend/__pycache__/
+  git rm -r --cached agentin/plugins/http-tts-bridge/python_backend/backend/routers/__pycache__/
+
+  # 2. Remove A2A runtime data
+  git rm -r --cached agentin/a2a/events/
+  git rm -r --cached agentin/a2a/tasks/
+
+  # 3. Remove runtime sub-agents
+  git rm -r --cached "agentin/agents/sub/diag-search-1776453748776/"
+  git rm -r --cached "agentin/agents/sub/live-search-verifier-1776453564659/"
+  git rm -r --cached "agentin/agents/sub/live-search-verifier-1776453628736/"
+  git rm -r --cached "agentin/agents/sub/live-time-verifier-1776454130153/"
+  git rm -r --cached "agentin/agents/sub/live-time-verifier-1776454985119/"
+  git rm -r --cached "agentin/agents/sub/live-time-verifier-1776455978209/"
+  git rm -r --cached "agentin/agents/sub/live-time-verifier-1776457715692/"
+
+  # 4. Remove task queue state
+  git rm --cached agentin/tasks/tasks.md
+
+  # 5. Remove workflow duplicates
+  git rm --cached agentin/workflows/system_health_check_copy.json
+
+  # 6. Commit the cleanup
+  git add .gitignore
+  git commit -m "chore: untrack runtime files, fix .gitignore coverage"
+
+
+================================================================================
+SUMMARY
+================================================================================
+
+  Tracked runtime files to remove:   ~35 files (pyc, a2a, sub-agents, tasks)
+  Missing .gitignore rules:           7 patterns needed
+  Sensitive content risks:            2 to verify (INT-018, INT-019)
+  Already safe:                       .env, databases, memory, workspaces ✅
+
+  After applying the fixes above, `git status` should be clean except for
+  intentional code changes.
+
+================================================================================

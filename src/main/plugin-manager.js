@@ -1,11 +1,13 @@
-const fs = require('fs');
-const path = require('path');
 const { EventEmitter } = require('events');
-const { getManifestCapabilityContract } = require('./plugin-capability-contracts');
-
-const ACTIVE_PLUGIN_MANAGERS = new Set();
-let EMERGENCY_HOOKS_INSTALLED = false;
-let EMERGENCY_EXIT_IN_PROGRESS = false;
+const { PluginConfigStore } = require('./plugin-config-store');
+const PluginAgentUiService = require('./plugin-agent-ui-service');
+const { RuntimePolicy } = require('./runtime-policy');
+const { buildRuntimePaths } = require('./runtime-paths');
+const PluginProcessService = require('./plugin-process-service');
+const { PluginDiscoveryService } = require('./plugin-discovery-service');
+const { PluginModuleLoader } = require('./plugin-module-loader');
+const PluginSummaryService = require('./plugin-summary-service');
+const PluginStateStore = require('./plugin-state-store');
 
 /**
  * PluginManager — Discovers, loads, and manages plugins.
@@ -25,31 +27,48 @@ class PluginManager extends EventEmitter {
         this.db = container.get('db');
         this.mcpServer = container.get('mcpServer');
         this.capabilityManager = container.optional('capabilityManager');
-        this.pluginsDir = options.pluginsDir || path.join(__dirname, '../../agentin/plugins');
+        this.stateStore = options.stateStore || new PluginStateStore(this.db);
+        this.configStore = new PluginConfigStore(this.db);
+        this.agentUi = new PluginAgentUiService(this);
+        this.runtimePolicy = options.runtimePolicy || container.optional('runtimePolicy') || new RuntimePolicy();
+        this.pluginsDir = options.pluginsDir || buildRuntimePaths(options).pluginsDir;
         this.plugins = new Map(); // id -> { manifest, status, module, handlers[] }
+        this.processService = options.processService || new PluginProcessService({ plugins: this.plugins });
+        this.moduleLoader = options.moduleLoader || new PluginModuleLoader();
+        this.summaryService = options.summaryService || new PluginSummaryService();
+        this.discovery = options.discoveryService || new PluginDiscoveryService({
+            db: this.db,
+            pluginsDir: this.pluginsDir,
+            stateStore: this.stateStore
+        });
         this._ensureDir();
-        ACTIVE_PLUGIN_MANAGERS.add(this);
-        this._installEmergencyProcessHooks();
     }
 
     _ensureDir() {
-        if (!fs.existsSync(this.pluginsDir)) {
-            fs.mkdirSync(this.pluginsDir, { recursive: true });
-        }
+        this.discovery.ensureDir();
     }
 
     // ==================== Discovery ====================
 
-    async initialize() {
+    async initialize(options = {}) {
         await this.scanPlugins();
         const cleanup = this._cleanupOrphanedPluginTools();
         if (cleanup.removed > 0) {
             console.warn(`[PluginManager] Removed ${cleanup.removed} stale plugin tool registration(s): ${cleanup.toolNames.join(', ')}`);
         }
-        // Auto-enable previously-enabled plugins
+        if (options.autoEnablePersisted !== false) {
+            await this.enablePersistedPlugins();
+        }
+        const contract = this._validatePluginToolContracts();
+        if (!contract.ok) {
+            console.error('[PluginManager] Plugin contract validation failed:', contract.issues);
+        }
+        console.log(`[PluginManager] Initialized ${this.plugins.size} plugin(s)`);
+    }
+
+    async enablePersistedPlugins() {
         for (const [id, plugin] of this.plugins) {
-            const row = this.db.get('SELECT status FROM plugins WHERE id = ?', [id]);
-            const shouldEnable = (row?.status || plugin.persistedStatus) === 'enabled';
+            const shouldEnable = (this.stateStore.getStatus(id) || plugin.persistedStatus) === 'enabled';
             if (shouldEnable) {
                 try {
                     await this.enablePlugin(id);
@@ -59,70 +78,10 @@ class PluginManager extends EventEmitter {
                 }
             }
         }
-        const contract = this._validatePluginToolContracts();
-        if (!contract.ok) {
-            console.error('[PluginManager] Plugin contract validation failed:', contract.issues);
-        }
-        console.log(`[PluginManager] Initialized ${this.plugins.size} plugin(s)`);
     }
 
     async scanPlugins(options = {}) {
-        if (!fs.existsSync(this.pluginsDir)) return;
-        const preserveExisting = options.preserveExisting === true;
-
-        const dirs = fs.readdirSync(this.pluginsDir, { withFileTypes: true })
-            .filter(d => d.isDirectory())
-            .sort((a, b) => a.name.localeCompare(b.name));
-
-        for (const dir of dirs) {
-            const manifestPath = path.join(this.pluginsDir, dir.name, 'plugin.json');
-            if (!fs.existsSync(manifestPath)) continue;
-
-            try {
-                const raw = fs.readFileSync(manifestPath, 'utf-8');
-                const manifest = JSON.parse(raw);
-
-                if (!manifest.id || !manifest.name || !manifest.main) {
-                    console.warn(`[PluginManager] Invalid manifest in ${dir.name}: missing id/name/main`);
-                    continue;
-                }
-                const pluginDir = path.join(this.pluginsDir, dir.name);
-
-                // Ensure DB row exists
-                const existing = this.db.get('SELECT id, status FROM plugins WHERE id = ?', [manifest.id]);
-                if (!existing) {
-                    this.db.run(
-                        'INSERT INTO plugins (id, name, version, status) VALUES (?, ?, ?, ?)',
-                        [manifest.id, manifest.name, manifest.version || '0.0.0', 'disabled']
-                    );
-                }
-
-                const current = this.plugins.get(manifest.id);
-                if (preserveExisting && current) {
-                    current.manifest = manifest;
-                    current.dir = pluginDir;
-                    current.persistedStatus = existing?.status || current.persistedStatus || 'disabled';
-                    if (!current.managedProcesses) {
-                        current.managedProcesses = new Set();
-                    }
-                    continue;
-                }
-
-                this.plugins.set(manifest.id, {
-                    manifest,
-                    dir: pluginDir,
-                    status: 'disabled',
-                    persistedStatus: existing?.status || 'disabled',
-                    module: null,
-                    context: null,
-                    handlers: [],
-                    chatUIs: [],
-                    managedProcesses: new Set()
-                });
-            } catch (e) {
-                console.error(`[PluginManager] Failed to read manifest in ${dir.name}:`, e.message);
-            }
-        }
+        this.discovery.scanInto(this.plugins, options);
     }
 
     async rescanPlugins() {
@@ -147,18 +106,11 @@ class PluginManager extends EventEmitter {
         }
 
         try {
-            const mainPath = path.join(plugin.dir, plugin.manifest.main);
-            if (!fs.existsSync(mainPath)) {
-                throw new Error(`Plugin entry point not found: ${mainPath}`);
-            }
-
-            // Clear plugin subtree from require cache for reliable hot-reload.
-            this._clearPluginRequireCache(plugin.dir);
-
-            const pluginModule = require(mainPath);
+            const pluginModule = this.moduleLoader.load(plugin);
             plugin.module = pluginModule;
             plugin.handlers = [];
             plugin.chatUIs = [];
+            plugin.sidebarWidgets = [];
 
             // Build context for the plugin
             const context = this._buildPluginContext(pluginId, plugin);
@@ -223,9 +175,10 @@ class PluginManager extends EventEmitter {
 
     _buildPluginContext(pluginId, plugin) {
         const self = this;
-        const config = this._loadPluginConfig(pluginId);
+        const config = this._loadPluginConfig(pluginId, { includeSecrets: true });
         const manifestAgentScopes = this._resolveManifestAgentScopes(plugin.manifest);
         const connectorRuntime = this.container.optional('connectorRuntime');
+        const setupSuperagentService = this.container.optional('setupSuperagentService');
 
         return {
             config,
@@ -233,6 +186,7 @@ class PluginManager extends EventEmitter {
             pluginDir: plugin.dir,
 
             registerHandler(name, definition, handler) {
+                self._assertPluginRuntime(plugin, 'plugin.handler.register', { handlerName: name });
                 const toolName = `plugin_${pluginId.replace(/-/g, '_')}_${name}`;
                 const definitionScope = self._normalizeScopeList(definition?.agentScope);
                 const effectiveScope = definitionScope || manifestAgentScopes;
@@ -244,10 +198,12 @@ class PluginManager extends EventEmitter {
                     inputSchema: definition.inputSchema || { type: 'object' },
                     isPlugin: true,
                     pluginId,
+                    privateSafe: definition.privateSafe === true || plugin.manifest.privateSafe === true,
                     ...(effectiveScope ? { agentScope: effectiveScope } : {})
-                }, async (params) => {
+                }, async (params, toolContext = {}) => {
                     try {
-                        return await handler(params);
+                        const enrichedParams = await self._enrichPluginHandlerParams(params, toolContext);
+                        return await handler(enrichedParams, toolContext);
                     } catch (e) {
                         console.error(`[Plugin:${pluginId}] Handler "${name}" error:`, e.message);
                         throw e;
@@ -265,6 +221,9 @@ class PluginManager extends EventEmitter {
             },
 
             registerChatUI(contribution) {
+                self._assertPluginRuntime(plugin, 'plugin.chatui.register', {
+                    title: contribution?.title || plugin.manifest.name
+                });
                 if (!contribution || typeof contribution !== 'object') {
                     throw new Error('registerChatUI requires a contribution object');
                 }
@@ -282,49 +241,94 @@ class PluginManager extends EventEmitter {
                 console.log(`[PluginManager] Registered chat UI for "${pluginId}"`);
             },
 
+            registerSidebarWidget(contribution) {
+                self._assertPluginRuntime(plugin, 'plugin.sidebar.register', {
+                    title: contribution?.title || plugin.manifest.name
+                });
+                if (!contribution || typeof contribution !== 'object') {
+                    throw new Error('registerSidebarWidget requires a contribution object');
+                }
+                const widget = {
+                    id: contribution.id || `sidebar-${pluginId}-${(plugin.sidebarWidgets || []).length}`,
+                    pluginId,
+                    title: contribution.title || plugin.manifest.name,
+                    html: contribution.html || '',
+                    css: contribution.css || '',
+                    chrome: contribution.chrome !== false,
+                    renderPanel: contribution.renderPanel || null,
+                    actions: contribution.actions && typeof contribution.actions === 'object'
+                        ? contribution.actions
+                        : {},
+                    position: contribution.position || 'before-calendar'
+                };
+                const existingIndex = plugin.sidebarWidgets.findIndex(entry => entry.id === widget.id);
+                if (existingIndex >= 0) {
+                    plugin.sidebarWidgets[existingIndex] = widget;
+                } else {
+                    plugin.sidebarWidgets.push(widget);
+                }
+                self.emit('sidebar-widget-registered', { id: widget.id, pluginId });
+                console.log(`[PluginManager] Registered sidebar widget "${widget.id}" for "${pluginId}"`);
+            },
+
             log(message) {
+                self._assertPluginRuntime(plugin, 'plugin.log');
                 console.log(`[Plugin:${pluginId}] ${message}`);
             },
 
             getConfig(key) {
-                const latest = self._loadPluginConfig(pluginId);
-                if (typeof key === 'undefined') return latest;
-                return latest[key];
+                self._assertPluginRuntime(plugin, 'plugin.config.read', { key });
+                if (typeof key === 'undefined') {
+                    return self._loadPluginConfig(pluginId, { includeSecrets: true });
+                }
+                return self.configStore.get(pluginId, plugin.manifest, key, { includeSecrets: true });
             },
 
             async setConfig(key, value) {
-                await self.setPluginConfig(pluginId, key, value);
-                config[key] = value;
+                self._assertPluginRuntime(plugin, 'plugin.config.write', { key });
+                const result = await self.setPluginConfig(pluginId, key, value);
+                if (!result?.preserved) {
+                    config[key] = String(result?.value ?? value ?? '');
+                }
             },
 
             registerManagedProcess(proc, metadata = {}) {
+                self._assertPluginRuntime(plugin, 'plugin.process.manage', metadata);
                 return self._registerManagedProcess(plugin, proc, metadata);
             },
 
             connectors: {
                 async list() {
+                    self._assertPluginRuntime(plugin, 'plugin.connector.list');
                     if (!connectorRuntime?.listConnectors) return [];
                     return connectorRuntime.listConnectors();
                 },
                 async start(name) {
+                    self._assertPluginRuntime(plugin, 'plugin.connector.start', { connectorName: String(name || '') });
                     if (!connectorRuntime?.startConnector) {
                         throw new Error('Connector runtime is unavailable');
                     }
                     return connectorRuntime.startConnector(String(name || ''));
                 },
                 async stop(name) {
+                    self._assertPluginRuntime(plugin, 'plugin.connector.stop', { connectorName: String(name || '') });
                     if (!connectorRuntime?.stopConnector) {
                         throw new Error('Connector runtime is unavailable');
                     }
                     return connectorRuntime.stopConnector(String(name || ''));
                 },
                 async getConfig(name) {
+                    self._assertPluginRuntime(plugin, 'plugin.connector.config.read', { connectorName: String(name || '') });
                     if (!connectorRuntime?.getConfig) {
                         throw new Error('Connector runtime is unavailable');
                     }
-                    return connectorRuntime.getConfig(String(name || ''));
+                    return connectorRuntime.getConfig(String(name || ''), { includeSecrets: true });
                 },
                 async setConfig(name, key, value) {
+                    self._assertPluginRuntime(plugin, 'plugin.connector.config.write', {
+                        connectorName: String(name || ''),
+                        key
+                    });
                     if (!connectorRuntime?.setConfig) {
                         throw new Error('Connector runtime is unavailable');
                     }
@@ -334,8 +338,53 @@ class PluginManager extends EventEmitter {
                         String(value == null ? '' : value)
                     );
                 }
+            },
+
+            setupSuperagent: {
+                async getAssessment(options = {}) {
+                    self._assertPluginRuntime(plugin, 'plugin.setupsuperagent.read');
+                    if (!setupSuperagentService?.getAssessment) {
+                        throw new Error('Setup superagent service is unavailable');
+                    }
+                    return setupSuperagentService.getAssessment(options);
+                },
+                async runAction(input = {}) {
+                    self._assertPluginRuntime(plugin, 'plugin.setupsuperagent.write', {
+                        action: input?.action || ''
+                    });
+                    if (!setupSuperagentService?.runAction) {
+                        throw new Error('Setup superagent service is unavailable');
+                    }
+                    return setupSuperagentService.runAction(input);
+                },
+                async dismissAction(actionId) {
+                    self._assertPluginRuntime(plugin, 'plugin.setupsuperagent.write', { actionId });
+                    if (!setupSuperagentService?.dismissAction) {
+                        throw new Error('Setup superagent service is unavailable');
+                    }
+                    return setupSuperagentService.dismissAction(actionId);
+                }
             }
         };
+    }
+
+    _assertPluginRuntime(plugin, action, metadata = {}) {
+        if (!this.runtimePolicy?.assert) {
+            return true;
+        }
+        return this.runtimePolicy.assert({
+            principal: this.runtimePolicy.createPluginPrincipal
+                ? this.runtimePolicy.createPluginPrincipal(plugin.manifest.id, plugin.manifest)
+                : { type: 'plugin', id: `plugin:${plugin.manifest.id}`, profile: 'plugin-legacy' },
+            action,
+            resource: metadata.resource || plugin.dir,
+            manifest: plugin.manifest,
+            metadata: {
+                pluginId: plugin.manifest.id,
+                pluginDir: plugin.dir,
+                ...metadata
+            }
+        });
     }
 
     // ==================== Knowledge Generation ====================
@@ -395,49 +444,45 @@ class PluginManager extends EventEmitter {
 
     // ==================== Config ====================
 
-    _loadPluginConfig(pluginId) {
-        const config = {};
-        const prefix = `plugin.${pluginId}.`;
-        const settings = this.db.all('SELECT key, value FROM settings WHERE key LIKE ?', [`${prefix}%`]);
-        for (const row of settings) {
-            config[row.key.slice(prefix.length)] = row.value;
-        }
-        return config;
+    _loadPluginConfig(pluginId, options = {}) {
+        const plugin = this.plugins.get(pluginId);
+        return this.configStore.load(pluginId, plugin?.manifest || {}, options);
     }
 
     async setPluginConfig(pluginId, key, value, options = {}) {
-        const settingKey = `plugin.${pluginId}.${key}`;
-        this.db.run(
-            'INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
-            [settingKey, String(value)]
-        );
-
         const plugin = this.plugins.get(pluginId);
-        if (plugin?.context?.config) {
-            plugin.context.config[key] = String(value);
+        const result = this.configStore.set(pluginId, plugin?.manifest || {}, key, value);
+        if (plugin?.context?.config && !result.preserved) {
+            plugin.context.config[result.key] = String(result.value ?? '');
         }
 
         if (
             options?.notifyHook !== false
+            && !result.preserved
             && plugin?.status === 'enabled'
             && plugin?.module
             && typeof plugin.module.onConfigChanged === 'function'
         ) {
-            await plugin.module.onConfigChanged(String(key), String(value), plugin.context);
+            await plugin.module.onConfigChanged(String(result.key), String(result.value ?? ''), plugin.context);
         }
+        return result;
     }
 
-    async getPluginConfig(pluginId) {
-        return this._loadPluginConfig(pluginId);
+    async getPluginConfig(pluginId, options = {}) {
+        return this._loadPluginConfig(pluginId, options);
+    }
+
+    setPluginSidebarVisible(pluginId, visible) {
+        const plugin = this.plugins.get(pluginId);
+        if (!plugin) throw new Error(`Plugin "${pluginId}" not found`);
+        plugin.visibleInSidebar = this.stateStore.setSidebarVisible(pluginId, visible);
+        return { id: pluginId, visibleInSidebar: plugin.visibleInSidebar };
     }
 
     // ==================== State ====================
 
     _updateDbStatus(pluginId, status, error = null) {
-        this.db.run(
-            'UPDATE plugins SET status = ?, error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-            [status, error, pluginId]
-        );
+        this.stateStore.updateStatus(pluginId, status, error);
     }
 
     _cleanupOrphanedPluginTools() {
@@ -491,298 +536,59 @@ class PluginManager extends EventEmitter {
     }
 
     listPlugins() {
-        const result = [];
-        for (const [id, plugin] of this.plugins) {
-            result.push({
-                id,
-                name: plugin.manifest.name,
-                version: plugin.manifest.version || '0.0.0',
-                description: plugin.manifest.description || '',
-                agentSlug: plugin.manifest.agentSlug || null,
-                agentSlugs: plugin.manifest.agentSlugs || [],
-                capabilities: Array.isArray(plugin.manifest.capabilities) ? plugin.manifest.capabilities : [],
-                capabilityContracts: plugin.manifest.capabilityContracts || plugin.manifest.contracts || {},
-                status: plugin.status,
-                handlerCount: plugin.handlers.length,
-                handlers: plugin.handlers.map(h => h.toolName),
-                chatUICount: plugin.chatUIs?.length || 0
-            });
-        }
-        return result;
+        return this.summaryService.list(this.plugins);
     }
 
     getAgentPlugin(agentSlug) {
-        return this.getAgentPlugins(agentSlug)[0] || null;
-    }
-
-    _parseAgentConfig(agentInfo) {
-        const raw = agentInfo?.config;
-        if (!raw) return {};
-        if (typeof raw === 'object' && !Array.isArray(raw)) {
-            return raw;
-        }
-        if (typeof raw === 'string') {
-            try {
-                const parsed = JSON.parse(raw);
-                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                    return parsed;
-                }
-            } catch (error) {
-                return {};
-            }
-        }
-        return {};
-    }
-
-    _normalizeUiMode(value) {
-        const mode = String(value || 'plugin').trim().toLowerCase();
-        if (mode === 'no_ui' || mode === 'noplugin' || mode === 'classic') {
-            return 'no_ui';
-        }
-        return 'plugin';
-    }
-
-    _getConfiguredUiPluginId(agentInfo) {
-        const config = this._parseAgentConfig(agentInfo);
-        return String(
-            config.chat_ui_plugin
-            || config.chatUiPlugin
-            || config.ui_plugin_id
-            || config.uiPluginId
-            || ''
-        ).trim() || null;
-    }
-
-    _resolveFallbackUiPluginId(agentInfo) {
-        const slug = String(agentInfo?.slug || '').trim();
-        if (!slug) return null;
-
-        const legacyContractMap = {
-            'file-manager': 'agent-file-browser',
-            'research-orchestrator': 'agent-research-orchestrator-ui',
-            'universal-rag-agent': 'agent-rag-studio'
-        };
-        const mappedPlugin = legacyContractMap[slug];
-        if (mappedPlugin && this.plugins.has(mappedPlugin)) {
-            return mappedPlugin;
-        }
-
-        const exactMatches = [];
-        for (const [id, plugin] of this.plugins) {
-            const declared = String(plugin.manifest?.agentSlug || '').trim();
-            if (declared && declared === slug) {
-                exactMatches.push(id);
-            }
-        }
-        exactMatches.sort((a, b) => a.localeCompare(b));
-        return exactMatches[0] || null;
+        return this.agentUi.getAgentPlugin(agentSlug);
     }
 
     resolvePrimaryAgentChatUIPlugin(agentInfo, options = {}) {
-        const allowFallback = options.allowFallback !== false;
-        const configured = this._getConfiguredUiPluginId(agentInfo);
-        if (configured && this.plugins.has(configured)) {
-            return configured;
-        }
-        if (!allowFallback) return null;
-        return this._resolveFallbackUiPluginId(agentInfo);
-    }
-
-    _resolveAgentChatUITarget(agentInfo, uiContext = {}) {
-        const uiMode = this._normalizeUiMode(uiContext?.uiMode);
-        if (uiMode !== 'plugin') {
-            return { uiMode, pluginId: null, plugin: null };
-        }
-
-        const requestedPluginId = String(uiContext?.uiPluginId || '').trim() || null;
-        const primaryPluginId = this.resolvePrimaryAgentChatUIPlugin(agentInfo, { allowFallback: true });
-        const resolvedPluginId = requestedPluginId || primaryPluginId;
-        if (!resolvedPluginId) {
-            return { uiMode, pluginId: null, plugin: null };
-        }
-
-        // Enforce 1:1 contract: only the primary plugin can own chat UI for this agent.
-        if (primaryPluginId && resolvedPluginId !== primaryPluginId) {
-            return { uiMode, pluginId: primaryPluginId, plugin: null, rejectedPluginId: resolvedPluginId };
-        }
-
-        const plugin = this.plugins.get(resolvedPluginId) || null;
-        if (!plugin || plugin.status !== 'enabled' || !plugin.chatUIs?.length) {
-            return { uiMode, pluginId: resolvedPluginId, plugin: null };
-        }
-
-        return { uiMode, pluginId: resolvedPluginId, plugin };
+        return this.agentUi.resolvePrimaryAgentChatUIPlugin(agentInfo, options);
     }
 
     getPluginsByCapability(capability, options = {}) {
-        const requested = String(capability || '').trim();
-        if (!requested) return [];
-        const enabledOnly = options.enabledOnly === true;
-        const matches = [];
-        for (const [id, plugin] of this.plugins) {
-            const capabilities = Array.isArray(plugin.manifest?.capabilities)
-                ? plugin.manifest.capabilities.map(value => String(value).trim())
-                : [];
-            if (!capabilities.includes(requested)) continue;
-            if (enabledOnly && plugin.status !== 'enabled') continue;
-            matches.push({
-                id,
-                name: plugin.manifest.name,
-                description: plugin.manifest.description || '',
-                status: plugin.status,
-                capabilities,
-                contract: getManifestCapabilityContract(plugin.manifest, requested)
-            });
-        }
-        return matches;
+        return this.agentUi.getPluginsByCapability(capability, options);
     }
 
     getAgentPlugins(agentSlug) {
-        const slug = String(agentSlug || '').trim();
-        if (!slug) return [];
-        const matches = [];
-        for (const [id, plugin] of this.plugins) {
-            const manifest = plugin.manifest || {};
-            const slugs = [
-                manifest.agentSlug,
-                ...(Array.isArray(manifest.agentSlugs) ? manifest.agentSlugs : [])
-            ].filter(Boolean).map(value => String(value).trim());
-
-            if (slugs.includes(slug) || slugs.includes('*')) {
-                matches.push(id);
-            }
-        }
-
-        return matches;
+        return this.agentUi.getAgentPlugins(agentSlug);
     }
 
     async getAgentChatUI(agentInfo, uiContext = {}) {
-        const target = this._resolveAgentChatUITarget(agentInfo, uiContext);
-        if (!target.plugin) {
-            return null;
-        }
-
-        const panels = [];
-        const css = [];
-        const actions = {};
-
-        const pluginId = target.pluginId;
-        const plugin = target.plugin;
-        for (const contribution of plugin.chatUIs) {
-            try {
-                const html = typeof contribution.renderPanel === 'function'
-                    ? await contribution.renderPanel(agentInfo)
-                    : contribution.html;
-                if (!html) continue;
-                panels.push(`<div class="agent-ui-plugin" data-agent-ui-plugin-id="${pluginId}">${html}</div>`);
-                if (contribution.css) {
-                    css.push(`/* ${pluginId} */\n${contribution.css}`);
-                }
-                actions[pluginId] = Object.keys(contribution.actions || {});
-            } catch (error) {
-                console.error(`[PluginManager] Chat UI render failed for "${pluginId}":`, error.message);
-            }
-        }
-
-        if (panels.length === 0) {
-            return null;
-        }
-
-        return {
-            pluginIds: [pluginId],
-            uiPluginId: pluginId,
-            uiMode: target.uiMode,
-            title: agentInfo?.name || 'Agent',
-            html: panels.join('\n'),
-            css: css.join('\n\n'),
-            actions
-        };
-    }
-
-    _getEnabledChatContributions(agentInfo, pluginId = null, uiContext = {}) {
-        const contextWithPlugin = {
-            ...uiContext,
-            ...(pluginId ? { uiPluginId: pluginId } : {})
-        };
-        const target = this._resolveAgentChatUITarget(agentInfo, contextWithPlugin);
-        const pluginIds = target.plugin ? [target.pluginId] : [];
-        const output = [];
-
-        for (const id of pluginIds) {
-            const plugin = this.plugins.get(id);
-            if (!plugin || plugin.status !== 'enabled' || !plugin.chatUIs?.length) {
-                continue;
-            }
-            for (const contribution of plugin.chatUIs) {
-                output.push({ pluginId: id, plugin, contribution });
-            }
-        }
-
-        return output;
+        return this.agentUi.getAgentChatUI(agentInfo, uiContext);
     }
 
     async runAgentChatUIAction(agentInfo, action, payload = {}, uiContext = {}) {
-        const actionName = String(action || '').trim();
-        if (!actionName) {
-            throw new Error('Agent chat UI action is required');
-        }
-
-        const requestedPluginId = payload?.pluginId || payload?._pluginId || null;
-        const contributions = this._getEnabledChatContributions(agentInfo, requestedPluginId, uiContext);
-        for (const { pluginId, plugin, contribution } of contributions) {
-            const handler = contribution.actions?.[actionName];
-            if (typeof handler !== 'function') {
-                continue;
-            }
-            return handler({
-                agentInfo,
-                payload,
-                pluginId,
-                context: plugin.context,
-                render: () => {
-                    if (typeof contribution.renderPanel === 'function') {
-                        return contribution.renderPanel(agentInfo);
-                    }
-                    return contribution.html || '';
-                }
-            });
-        }
-
-        throw new Error(`Agent chat UI action "${actionName}" not found`);
+        return this.agentUi.runAgentChatUIAction(agentInfo, action, payload, uiContext);
     }
 
     async handleAgentChatUIEvent(agentInfo, eventName, payload = {}, uiContext = {}) {
-        const key = eventName === 'activated'
-            ? 'onTabActivated'
-            : eventName === 'deactivated'
-                ? 'onTabDeactivated'
-                : null;
-        if (!key) return null;
-
-        const results = [];
-        for (const { pluginId, plugin, contribution } of this._getEnabledChatContributions(agentInfo, null, uiContext)) {
-            const handler = contribution[key];
-            if (typeof handler !== 'function') continue;
-            results.push(await handler(agentInfo, payload, plugin.context, pluginId));
-        }
-        return { success: true, results };
+        return this.agentUi.handleAgentChatUIEvent(agentInfo, eventName, payload, uiContext);
     }
 
     getPluginDetail(pluginId) {
+        return this.summaryService.detail(this.plugins, pluginId, {
+            loadConfig: id => this._loadPluginConfig(id)
+        });
+    }
+
+    async getPluginSetupUI(pluginId) {
         const plugin = this.plugins.get(pluginId);
-        if (!plugin) return null;
+        if (!plugin) throw new Error(`Plugin "${pluginId}" not found`);
+        const pluginModule = plugin.module || this.moduleLoader.load(plugin);
+        const renderer = pluginModule.renderSetupUI || pluginModule.renderSetup || pluginModule.getSetupUI;
+        if (typeof renderer !== 'function') return null;
+
+        this._assertPluginRuntime(plugin, 'plugin.setup.render');
+        const context = plugin.context || this._buildPluginContext(pluginId, plugin);
+        const result = await renderer(context);
+        if (!result || typeof result !== 'object') return null;
+
         return {
-            id: pluginId,
-            manifest: plugin.manifest,
-            status: plugin.status,
-            capabilities: Array.isArray(plugin.manifest.capabilities) ? plugin.manifest.capabilities : [],
-            capabilityContracts: plugin.manifest.capabilityContracts || plugin.manifest.contracts || {},
-            handlers: plugin.handlers.map(h => ({
-                name: h.name,
-                toolName: h.toolName,
-                description: h.definition.description
-            })),
-            config: this._loadPluginConfig(pluginId)
+            html: String(result.html || ''),
+            css: String(result.css || ''),
+            mode: String(result.mode || 'plugin')
         };
     }
 
@@ -791,6 +597,7 @@ class PluginManager extends EventEmitter {
         if (!plugin) throw new Error(`Plugin "${pluginId}" not found`);
         if (plugin.status !== 'enabled') throw new Error(`Plugin "${pluginId}" must be enabled to run actions`);
         if (!plugin.module) throw new Error(`Plugin "${pluginId}" module is not loaded`);
+        this._assertPluginRuntime(plugin, 'plugin.action.run', { action });
 
         if (typeof plugin.module.runAction === 'function') {
             return plugin.module.runAction(action, params, plugin.context);
@@ -818,79 +625,19 @@ class PluginManager extends EventEmitter {
     }
 
     _registerManagedProcess(plugin, proc, metadata = {}) {
-        if (!plugin || !proc || typeof proc.kill !== 'function') {
-            return () => {};
-        }
-
-        const entry = { proc, metadata };
-        plugin.managedProcesses = plugin.managedProcesses || new Set();
-        plugin.managedProcesses.add(entry);
-
-        const cleanup = () => {
-            plugin.managedProcesses.delete(entry);
-        };
-
-        if (typeof proc.once === 'function') {
-            proc.once('exit', cleanup);
-        }
-
-        return cleanup;
+        return this.processService.register(plugin, proc, metadata);
     }
 
     _terminateManagedProcesses(plugin, reason = '') {
-        const tracked = Array.from(plugin.managedProcesses || []);
-        plugin.managedProcesses?.clear();
-        for (const entry of tracked) {
-            this._terminateManagedProcess(entry.proc, reason, entry.metadata);
-        }
+        this.processService.terminatePlugin(plugin, reason);
     }
 
     _terminateManagedProcess(proc, reason = '', metadata = {}) {
-        if (!proc || typeof proc.kill !== 'function') return;
-        const label = metadata?.name ? `${metadata.name}` : 'managed-process';
-        try {
-            proc.kill('SIGTERM');
-        } catch (_) {}
-        try {
-            proc.kill('SIGKILL');
-        } catch (_) {}
-        if (reason) {
-            console.log(`[PluginManager] Forced stop ${label} (${reason})`);
-        }
+        this.processService.terminate(proc, reason, metadata);
     }
 
     _emergencyTerminateAllManagedProcesses(reason = 'emergency-exit') {
-        for (const [, plugin] of this.plugins) {
-            this._terminateManagedProcesses(plugin, reason);
-        }
-    }
-
-    _installEmergencyProcessHooks() {
-        if (EMERGENCY_HOOKS_INSTALLED) return;
-        EMERGENCY_HOOKS_INSTALLED = true;
-
-        const runEmergencyStop = (reason) => {
-            if (EMERGENCY_EXIT_IN_PROGRESS) return;
-            EMERGENCY_EXIT_IN_PROGRESS = true;
-            for (const manager of ACTIVE_PLUGIN_MANAGERS) {
-                try {
-                    manager._emergencyTerminateAllManagedProcesses(reason);
-                } catch (error) {
-                    console.error('[PluginManager] Emergency managed-process cleanup failed:', error.message);
-                }
-            }
-        };
-
-        process.on('exit', () => {
-            runEmergencyStop('process-exit');
-        });
-
-        for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP']) {
-            process.on(signal, () => {
-                runEmergencyStop(`signal:${signal}`);
-                process.exit(0);
-            });
-        }
+        this.processService.terminateAll(reason);
     }
 
     _cleanupPluginHandlers(plugin) {
@@ -902,22 +649,53 @@ class PluginManager extends EventEmitter {
         }
         plugin.handlers = [];
         plugin.chatUIs = [];
+        plugin.sidebarWidgets = [];
     }
 
-    _clearPluginRequireCache(pluginDir) {
-        const resolvedRoot = path.resolve(pluginDir);
-        const rootPrefix = resolvedRoot.endsWith(path.sep) ? resolvedRoot : `${resolvedRoot}${path.sep}`;
-        const isWin = process.platform === 'win32';
-        const normRoot = isWin ? rootPrefix.toLowerCase() : rootPrefix;
-        const normExactRoot = isWin ? resolvedRoot.toLowerCase() : resolvedRoot;
-
-        for (const cachedPath of Object.keys(require.cache)) {
-            const resolvedPath = path.resolve(cachedPath);
-            const probe = isWin ? resolvedPath.toLowerCase() : resolvedPath;
-            if (probe === normExactRoot || probe.startsWith(normRoot)) {
-                delete require.cache[cachedPath];
+    getSidebarWidgets() {
+        const widgets = [];
+        for (const [pluginId, plugin] of this.plugins) {
+            if (plugin.status !== 'enabled') continue;
+            for (const widget of (plugin.sidebarWidgets || [])) {
+                widgets.push({
+                    id: String(widget.id || ''),
+                    pluginId: String(widget.pluginId || pluginId),
+                    title: String(widget.title || plugin.manifest?.name || pluginId),
+                    html: String(widget.html || ''),
+                    css: String(widget.css || ''),
+                    chrome: widget.chrome !== false,
+                    position: String(widget.position || 'before-calendar'),
+                    actionNames: Object.keys(widget.actions || {})
+                });
             }
         }
+        return widgets;
+    }
+
+    async runSidebarWidgetAction(widgetId, action, params = {}) {
+        const normalizedWidgetId = String(widgetId || '').trim();
+        const normalizedAction = String(action || '').trim();
+        if (!normalizedWidgetId) throw new Error('Sidebar widget id is required');
+        if (!normalizedAction) throw new Error('Sidebar widget action is required');
+
+        for (const [pluginId, plugin] of this.plugins) {
+            if (plugin.status !== 'enabled') continue;
+            for (const widget of (plugin.sidebarWidgets || [])) {
+                if (String(widget.id || '') !== normalizedWidgetId) continue;
+                const handler = widget.actions?.[normalizedAction];
+                if (typeof handler !== 'function') {
+                    throw new Error(`Sidebar widget action "${normalizedAction}" not found`);
+                }
+                return handler({
+                    widgetId: normalizedWidgetId,
+                    pluginId,
+                    payload: params || {},
+                    context: plugin.context
+                });
+            }
+        }
+
+        throw new Error(`Sidebar widget "${normalizedWidgetId}" not found`);
     }
 
     _normalizeScopeList(rawScope) {
@@ -930,6 +708,28 @@ class PluginManager extends EventEmitter {
             return null;
         }
         return Array.from(new Set(normalized));
+    }
+
+    async _enrichPluginHandlerParams(params = {}, toolContext = {}) {
+        const context = toolContext?.context || {};
+        if (params?._agentInfo || !context.agentId) return params;
+        const agentManager = this.container.optional('agentManager');
+        if (!agentManager?.getAgent || !agentManager?.resolveAgentFolder) return params;
+        const agent = await agentManager.getAgent(context.agentId);
+        if (!agent) return params;
+        const folderPath = await agentManager.resolveAgentFolder(context.agentId);
+        const slug = agentManager._getSafeFolderName
+            ? agentManager._getSafeFolderName(agent.name)
+            : String(agent.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        return {
+            ...params,
+            _agentInfo: {
+                ...agent,
+                id: context.agentId,
+                slug,
+                folderPath
+            }
+        };
     }
 
     _resolveManifestAgentScopes(manifest = {}) {

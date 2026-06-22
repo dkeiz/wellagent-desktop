@@ -3,11 +3,8 @@ const path = require('path');
 const budgets = require('../fixtures/line-budgets.json');
 
 function collectFiles(rootDir) {
-  const pending = [
-    path.join(rootDir, 'src'),
-    path.join(rootDir, 'tools'),
-    path.join(rootDir, 'tests')
-  ];
+  const pending = (budgets.roots || ['src', 'tools', 'tests'])
+    .map(root => path.join(rootDir, root));
   const files = [];
 
   while (pending.length > 0) {
@@ -21,11 +18,31 @@ function collectFiles(rootDir) {
       continue;
     }
 
-    if (!/\.(js|css|html|md|json)$/.test(current)) continue;
+    const relativePath = path.relative(rootDir, current).replace(/\\/g, '/');
+    if (isExcluded(relativePath)) continue;
+    if (!/\.(cjs|css|html|js|json|jsx|md|mjs|ts|tsx)$/.test(current)) continue;
     files.push(current);
   }
 
   return files;
+}
+
+function isExcluded(relativePath) {
+  const normalized = String(relativePath || '').replace(/\\/g, '/');
+  return (budgets.exclude || []).some(pattern => {
+    const value = String(pattern || '').replace(/\\/g, '/');
+    if (value.includes('**')) {
+      let offset = 0;
+      for (const part of value.split('**')) {
+        if (!part) continue;
+        const index = normalized.indexOf(part, offset);
+        if (index < 0) return false;
+        offset = index + part.length;
+      }
+      return true;
+    }
+    return normalized === value;
+  });
 }
 
 function countLines(filePath) {
@@ -38,7 +55,9 @@ module.exports = {
   tags: ['contract', 'fast'],
   async run({ assert, rootDir }) {
     const violations = [];
+    const warnings = [];
     const files = collectFiles(rootDir);
+    const softMaxLines = Number(budgets.softMaxLines || 0);
 
     for (const filePath of files) {
       const relativePath = path.relative(rootDir, filePath).replace(/\\/g, '/');
@@ -48,13 +67,21 @@ module.exports = {
       if (fileBudget !== undefined) {
         if (lineCount > fileBudget) {
           violations.push(`${relativePath}: ${lineCount} lines exceeds allowlisted budget ${fileBudget}`);
+        } else if (softMaxLines > 0 && lineCount > softMaxLines && lineCount > Math.floor(fileBudget * 0.85)) {
+          warnings.push(`${relativePath}: ${lineCount} lines is near allowlisted budget ${fileBudget}`);
         }
         continue;
       }
 
       if (lineCount > budgets.defaultMaxLines) {
         violations.push(`${relativePath}: ${lineCount} lines exceeds default max ${budgets.defaultMaxLines}`);
+      } else if (softMaxLines > 0 && lineCount > softMaxLines) {
+        warnings.push(`${relativePath}: ${lineCount} lines exceeds soft warning threshold ${softMaxLines}`);
       }
+    }
+
+    if (warnings.length > 0) {
+      console.warn(`Line budget warnings:\n${warnings.join('\n')}`);
     }
 
     assert.equal(

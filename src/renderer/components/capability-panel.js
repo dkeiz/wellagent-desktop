@@ -4,16 +4,18 @@
  * Manages:
  * - Main Pad (master toggle)
  * - 6 Group Pads (unsafe, web, files, terminal, ports, visual)
- * - Files 3-mode switching (off/read/full)
+ * - Files and terminal mode switching
  * - Sync with backend CapabilityManager
  */
 class CapabilityPanel {
     constructor() {
+        this.panel = document.getElementById('capability-panel');
         this.mainPad = document.getElementById('capability-main-toggle');
         this.groupsContainer = document.getElementById('capability-groups');
         this.toolCountEl = document.getElementById('active-tool-count');
         this.safeInfoEl = document.getElementById('safe-tools-info');
-        this.contextBadgeEl = null;
+        this.densityToggle = document.getElementById('tools-density-toggle');
+        this.toolsCompactStorageKey = 'ui.toolsCompact';
         this.activeContext = { sessionId: null, agentId: null };
 
         this.state = {
@@ -25,12 +27,13 @@ class CapabilityPanel {
     }
 
     async init() {
-        this.ensureContextBadge();
         // Load initial state from backend
         await this.loadState();
         await this.refreshContextView();
 
         // Setup event listeners
+        this.applyLayoutDensity(this.currentLayoutMode());
+        this.setupDensityToggle();
         this.setupMainPadToggle();
         this.setupGroupToggles();
 
@@ -50,16 +53,6 @@ class CapabilityPanel {
         });
     }
 
-    ensureContextBadge() {
-        if (this.contextBadgeEl) return;
-        if (!this.mainPad || !this.mainPad.parentElement) return;
-        const badge = document.createElement('div');
-        badge.id = 'capability-context-badge';
-        badge.style.cssText = 'margin:0.25rem 0 0.15rem 0.2rem;font-size:0.72rem;opacity:0.85;';
-        this.mainPad.parentElement.insertBefore(badge, this.mainPad.nextSibling);
-        this.contextBadgeEl = badge;
-    }
-
     resolveUiContext() {
         const panel = window.mainPanel || window.app?.mainPanel || null;
         const sessionId = panel?.activeTabId ?? this.activeContext.sessionId ?? null;
@@ -68,18 +61,53 @@ class CapabilityPanel {
         return { sessionId, agentId };
     }
 
+    currentLayoutMode() {
+        return document.querySelector('.app-container')?.getAttribute('data-layout-mode') || 'desktop';
+    }
+
+    resolveCompactPreference(layoutMode = this.currentLayoutMode()) {
+        const saved = localStorage.getItem(this.toolsCompactStorageKey);
+        if (saved !== null) {
+            return saved === 'true';
+        }
+        return layoutMode === 'desktop';
+    }
+
+    applyToolsCompact(compact, persist = false) {
+        if (!this.panel) return;
+        this.panel.classList.toggle('tools-compact', compact);
+        this.panel.classList.toggle('tools-expanded', !compact);
+        if (this.densityToggle) {
+            this.densityToggle.setAttribute('aria-pressed', String(compact));
+            this.densityToggle.textContent = compact ? '▦' : '▤';
+            this.densityToggle.title = compact ? 'Show expanded tools' : 'Show compact tools';
+        }
+        if (persist) {
+            localStorage.setItem(this.toolsCompactStorageKey, String(compact));
+        }
+    }
+
+    applyLayoutDensity(layoutMode = this.currentLayoutMode()) {
+        const normalizedMode = window.LocalAgentLayoutMode?.normalize?.(layoutMode) || layoutMode || 'desktop';
+        this.applyToolsCompact(this.resolveCompactPreference(normalizedMode), false);
+    }
+
+    setupDensityToggle() {
+        if (!this.densityToggle) return;
+        this.densityToggle.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const compact = !this.panel?.classList.contains('tools-compact');
+            this.applyToolsCompact(compact, true);
+        });
+    }
+
     async refreshContextView() {
         const context = this.resolveUiContext();
         this.activeContext = context;
-        if (this.contextBadgeEl && window.electronAPI?.permissions?.getContext) {
-            try {
-                const resolved = await window.electronAPI.permissions.getContext(context);
-                const scope = resolved?.scope === 'agent' ? `Agent #${resolved.agentId}` : 'Global';
-                this.contextBadgeEl.textContent = `Resolved Context: ${scope}`;
-            } catch (error) {
-                this.contextBadgeEl.textContent = 'Resolved Context: Global';
-            }
-        }
+        // Do not render permission scope labels such as "Resolved Context",
+        // "Global", or "Agent #..." in the compact tools UI. Scope is an
+        // internal input for permission/tool-count queries only.
         await this.updateToolCount();
     }
 
@@ -99,6 +127,9 @@ class CapabilityPanel {
         if (!this.mainPad) return;
 
         this.mainPad.addEventListener('click', async (event) => {
+            if (event.target.closest('.tools-density-toggle')) {
+                return;
+            }
             const clickedToggle = Boolean(event.target.closest('.main-toggle-indicator'));
             if (!clickedToggle) {
                 const mcpNavButton = document.querySelector('.nav-btn[data-tab="mcp"]');
@@ -131,6 +162,11 @@ class CapabilityPanel {
                 // Special handling for Files group (3-mode cycle)
                 if (groupId === 'files') {
                     await this.cycleFilesMode(pad);
+                    return;
+                }
+
+                if (groupId === 'terminal') {
+                    await this.cycleTerminalMode(pad);
                     return;
                 }
 
@@ -179,14 +215,48 @@ class CapabilityPanel {
     }
 
     updateFilesIndicator(pad, mode) {
+        this.updateModeIndicator(pad, mode, {
+            off: 0,
+            read: 2,
+            full: 3
+        });
+    }
+
+    async cycleTerminalMode(pad) {
+        const currentMode = pad.dataset.mode || 'off';
+        const modes = ['off', 'workspace', 'system'];
+        const currentIndex = modes.indexOf(currentMode);
+        const nextMode = modes[(currentIndex + 1) % 3];
+
+        try {
+            await window.electronAPI?.capability?.setTerminalMode?.(nextMode);
+            pad.dataset.mode = nextMode;
+            pad.classList.toggle('active', nextMode !== 'off');
+            this.updateTerminalIndicator(pad, nextMode);
+            this.autoEnableMainIfNeeded();
+        } catch (error) {
+            console.error('Failed to cycle terminal mode:', error);
+        }
+    }
+
+    updateTerminalIndicator(pad, mode) {
+        this.updateModeIndicator(pad, mode, {
+            off: 0,
+            workspace: 2,
+            system: 3
+        });
+    }
+
+    updateModeIndicator(pad, mode, levels) {
         const dots = pad.querySelectorAll('.mode-dot');
+        const activeDots = levels[mode] || 0;
         dots.forEach((dot, index) => {
-            if (mode === 'off') {
+            if (activeDots === 0) {
                 dot.style.background = 'var(--border-color, #d1d5db)';
-            } else if (mode === 'read') {
-                dot.style.background = index < 2 ? '#f59e0b' : 'var(--border-color, #d1d5db)';
-            } else if (mode === 'full') {
+            } else if (activeDots >= 3) {
                 dot.style.background = '#10b981';
+            } else {
+                dot.style.background = index < activeDots ? '#f59e0b' : 'var(--border-color, #d1d5db)';
             }
         });
     }
@@ -242,11 +312,15 @@ class CapabilityPanel {
                 if (!pad) return;
 
                 if (groupId === 'files') {
-                    // Files uses mode string
                     const mode = typeof value === 'string' ? value : 'off';
                     pad.dataset.mode = mode;
                     pad.classList.toggle('active', mode !== 'off');
                     this.updateFilesIndicator(pad, mode);
+                } else if (groupId === 'terminal') {
+                    const mode = typeof value === 'string' ? value : (value ? 'workspace' : 'off');
+                    pad.dataset.mode = mode;
+                    pad.classList.toggle('active', mode !== 'off');
+                    this.updateTerminalIndicator(pad, mode);
                 } else {
                     // Others use boolean
                     pad.classList.toggle('active', !!value);

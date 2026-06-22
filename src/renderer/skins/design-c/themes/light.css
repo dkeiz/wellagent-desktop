@@ -1,1 +1,20 @@
-html[data-active-skin=\"design-c\"][data-theme=\"light\"] { --skin-theme-id: light; }
+html[data-active-skin="design-c"][data-theme="light"] {
+  --skin-theme-id: light;
+  --main-bg: #edf5ff;
+  --sidebar-bg: #e1eefc;
+  --chat-bg: #f7fbff;
+  --card-bg: #ffffff;
+  --bg-secondary: #edf3fb;
+  --bg-tertiary: #e3edf9;
+  --text-primary: #1f3045;
+  --text-secondary: #415a77;
+  --text-muted: #6e839d;
+  --text-color: #1f3045;
+  --border-color: #b9cce2;
+  --hover-bg: #dbe8f7;
+  --active-bg: #d0deef;
+  --primary-color: #ff7a2f;
+  --user-msg-bg: #ff7a2f;
+  --user-msg-text: #ffffff;
+  --input-bg: #ffffff;
+}

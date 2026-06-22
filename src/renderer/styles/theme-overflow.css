@@ -1,0 +1,72 @@
+/* Light theme button colors */
+.theme-btn[data-theme="light"] {
+  background: #f8f9fa;
+  color: #1a1a1a;
+}
+
+/* Solar theme button colors */
+.theme-btn[data-theme="solar"] {
+  background: #fdf6e3;
+  color: #657b83;
+}
+
+/* Dark theme button colors */
+.theme-btn[data-theme="dark"] {
+  background: #1e1e1e;
+  color: #d4d4d4;
+}
+
+/* =====================================
+   Scrollbar Styling
+   ===================================== */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* =====================================
+   Responsive (Tablet Focus - No Scrolls)
+   ===================================== */
+
+@media (max-width: 1200px) {
+  .app-container {
+    grid-template-columns: 18% 64.5% 17.5%;
+  }
+}
+
+@media (max-width: 900px) {
+  .app-container {
+    grid-template-columns: 20% 62.5% 17.5%;
+  }
+}
+
+@media (max-width: 768px) {
+  .app-container {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto;
+  }
+
+  .sidebar,
+  .widget-panel {
+    display: none;
+  }
+
+  .sidebar.mobile-visible,
+  .widget-panel.mobile-visible {
+    display: flex;
+  }
+}

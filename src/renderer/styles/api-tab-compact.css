@@ -1,0 +1,145 @@
+/* =====================================
+   API Tab Compact Fit
+   ===================================== */
+
+#api-tab {
+  padding: var(--space-2);
+}
+
+#api-tab h2 {
+  margin: 0 0 var(--space-2) 0;
+  font-size: var(--text-lg);
+}
+
+#api-tab .setting-section {
+  margin-bottom: var(--space-2);
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+}
+
+#api-tab .setting-section h3 {
+  margin: 0 0 var(--space-1) 0;
+  font-size: var(--text-md);
+}
+
+#api-tab .slider-control {
+  gap: var(--space-1);
+}
+
+#api-tab .slider-labels {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+#api-tab .context-help-text {
+  margin: 0 0 var(--space-1) 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+}
+
+#api-tab #context-display {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+#api-tab #context-display-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+#api-tab #context-slider,
+#api-tab #context-slider::-webkit-slider-track,
+#api-tab #context-slider::-moz-range-track {
+  height: 4px;
+}
+
+#api-tab #context-slider {
+  margin: 2px 0 0 0;
+}
+
+#api-tab #context-slider::-webkit-slider-track {
+  background: var(--border-color);
+  border-radius: 999px;
+}
+
+#api-tab #context-slider::-moz-range-track {
+  background: var(--border-color);
+  border-radius: 999px;
+}
+
+#api-tab #context-slider::-webkit-slider-thumb,
+#api-tab #context-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  box-shadow: none;
+}
+
+#api-tab #context-slider::-webkit-slider-thumb:hover,
+#api-tab #context-slider::-moz-range-thumb:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+#api-tab .context-scale {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  align-items: center;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+#api-tab .context-scale span {
+  text-align: center;
+}
+
+#api-tab hr,
+#api-tab > div[style*="margin: 20px 0"] {
+  display: none !important;
+}
+
+#api-tab .llm-settings {
+  gap: var(--space-2);
+}
+
+#api-tab .provider-config {
+  padding: var(--space-2);
+}
+
+#api-tab .provider-config h3 {
+  margin: 0 0 var(--space-2) 0;
+  font-size: var(--text-md);
+}
+
+#api-tab .provider-config label {
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+}
+
+#api-tab .provider-config input,
+#api-tab .provider-config select,
+#api-tab .provider-config textarea {
+  min-height: var(--control-h-md);
+}
+
+#api-tab #llm-model-capabilities {
+  margin-bottom: var(--space-2) !important;
+  font-size: var(--text-sm) !important;
+  line-height: 1.25 !important;
+}
+
+#api-tab #llm-model-config-container > div {
+  margin-top: var(--space-2) !important;
+}
+
+#api-tab #current-config-display {
+  margin-top: var(--space-2) !important;
+  padding: var(--space-2) !important;
+}

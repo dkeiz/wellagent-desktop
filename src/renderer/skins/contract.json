@@ -15,5 +15,50 @@
     "stop-btn",
     "theme-picker",
     "skin-picker"
+  ],
+  "requiredThemeTokens": [
+    "--main-bg",
+    "--sidebar-bg",
+    "--chat-bg",
+    "--card-bg",
+    "--bg-secondary",
+    "--bg-tertiary",
+    "--text-primary",
+    "--text-secondary",
+    "--text-muted",
+    "--text-color",
+    "--border-color",
+    "--hover-bg",
+    "--active-bg",
+    "--primary-color",
+    "--user-msg-bg",
+    "--user-msg-text",
+    "--input-bg"
+  ],
+  "requiredUiTokens": [
+    "--space-1",
+    "--space-2",
+    "--space-3",
+    "--space-4",
+    "--space-6",
+    "--control-h-sm",
+    "--control-h-md",
+    "--control-h-lg",
+    "--radius-sm",
+    "--radius-md",
+    "--radius-lg",
+    "--text-xs",
+    "--text-sm",
+    "--text-md",
+    "--text-lg"
+  ],
+  "requiredAliasTokens": [
+    "--accent-color",
+    "--accent-hover",
+    "--accent-rgb",
+    "--bg-primary",
+    "--background-color",
+    "--background-color-light",
+    "--text-tertiary"
   ]
 }

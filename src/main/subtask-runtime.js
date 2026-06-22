@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const { buildSubagentIdentifiers } = require('./subagent-contract');
+const { isPrivateSessionId } = require('./private-session-store');
+const { buildRuntimePaths } = require('./runtime-paths');
 const {
     appendJsonLine,
     appendTraceSection,
@@ -18,7 +20,7 @@ class SubtaskRuntime {
         this.db = db;
         this.sessionWorkspace = sessionWorkspace;
         this.eventBus = eventBus;
-        this.basePath = basePath || path.join(__dirname, '../../agentin/subtasks');
+        this.basePath = basePath || buildRuntimePaths().subtaskBasePath;
         this.runsPath = path.join(this.basePath, 'runs');
         this.inboxesPath = path.join(this.basePath, 'inboxes');
         this.persistConversationMessage = typeof options.persistConversationMessage === 'function'
@@ -27,6 +29,7 @@ class SubtaskRuntime {
         this.notifyConversationUpdate = typeof options.notifyConversationUpdate === 'function'
             ? options.notifyConversationUpdate
             : null;
+        this.privateRuns = new Map();
     }
 
     initialize() {
@@ -44,8 +47,27 @@ class SubtaskRuntime {
         subagentMode = 'no_ui',
         provider = null,
         queue_provider = null,
-        concurrency_mode = 'queued'
+        concurrency_mode = 'queued',
+        runtimePolicyProfile = 'strict-subagent',
+        runtimePolicyGrants = {}
     }) {
+        if (isPrivateSessionId(parentSessionId)) {
+            return this._createPrivateRun({
+                parentSessionId,
+                subagentId,
+                agentName,
+                task,
+                contractType,
+                expectedOutput,
+                subagentMode,
+                provider,
+                queue_provider,
+                concurrency_mode,
+                runtimePolicyProfile,
+                runtimePolicyGrants
+            });
+        }
+
         this.cleanupStale(24);
         const runId = this._generateRunId();
         const runDir = path.join(this.runsPath, runId);
@@ -84,6 +106,8 @@ class SubtaskRuntime {
             provider: provider || null,
             queue_provider: queue_provider || null,
             concurrency_mode: String(concurrency_mode || 'queued').trim().toLowerCase() === 'parallel' ? 'parallel' : 'queued',
+            runtime_policy_profile: runtimePolicyProfile,
+            runtime_policy_grants: runtimePolicyGrants && typeof runtimePolicyGrants === 'object' ? runtimePolicyGrants : {},
             created_at: createdAt,
             run_dir: runDir,
             workspace_dir: workspaceDir,
@@ -115,6 +139,8 @@ class SubtaskRuntime {
             provider: provider || null,
             queue_provider: queue_provider || null,
             concurrency_mode: String(concurrency_mode || 'queued').trim().toLowerCase() === 'parallel' ? 'parallel' : 'queued',
+            runtime_policy_profile: runtimePolicyProfile,
+            runtime_policy_grants: runtimePolicyGrants && typeof runtimePolicyGrants === 'object' ? runtimePolicyGrants : {},
             summary: '',
             error: null,
             delivered_to_parent: false,
@@ -133,7 +159,104 @@ class SubtaskRuntime {
         return this.getRun(runId);
     }
 
+    _createPrivateRun({
+        parentSessionId = null,
+        subagentId,
+        agentName,
+        task,
+        contractType = 'task_complete',
+        expectedOutput = '',
+        subagentMode = 'no_ui',
+        provider = null,
+        queue_provider = null,
+        concurrency_mode = 'queued',
+        runtimePolicyProfile = 'strict-subagent',
+        runtimePolicyGrants = {}
+    }) {
+        const runId = this._generatePrivateRunId();
+        const childSessionId = runId;
+        const workspaceDir = this.sessionWorkspace
+            ? this.sessionWorkspace.getWorkspacePath(childSessionId)
+            : null;
+        const createdAt = new Date().toISOString();
+        const normalizedConcurrency = String(concurrency_mode || 'queued').trim().toLowerCase() === 'parallel'
+            ? 'parallel'
+            : 'queued';
+        const identifiers = buildSubagentIdentifiers({
+            run_id: runId,
+            parent_session_id: parentSessionId,
+            child_session_id: childSessionId,
+            subagent_id: subagentId
+        });
+        const request = {
+            private: true,
+            run_id: runId,
+            parent_session_id: parentSessionId,
+            child_session_id: childSessionId,
+            subagent_id: subagentId,
+            identifiers,
+            agent_name: agentName,
+            task,
+            contract_type: contractType,
+            expected_output: expectedOutput,
+            subagent_mode: subagentMode,
+            provider: provider || null,
+            queue_provider: queue_provider || null,
+            concurrency_mode: normalizedConcurrency,
+            runtime_policy_profile: runtimePolicyProfile,
+            runtime_policy_grants: runtimePolicyGrants && typeof runtimePolicyGrants === 'object' ? runtimePolicyGrants : {},
+            created_at: createdAt,
+            run_dir: null,
+            workspace_dir: workspaceDir,
+            request_path: null,
+            status_path: null,
+            result_path: null,
+            messages_path: null,
+            trace_path: null,
+            artifacts_dir: workspaceDir
+        };
+        const status = {
+            private: true,
+            run_id: runId,
+            status: 'queued',
+            created_at: createdAt,
+            updated_at: createdAt,
+            parent_session_id: parentSessionId,
+            child_session_id: childSessionId,
+            subagent_id: subagentId,
+            identifiers,
+            agent_name: agentName,
+            contract_type: contractType,
+            subagent_mode: subagentMode,
+            provider: provider || null,
+            queue_provider: queue_provider || null,
+            concurrency_mode: normalizedConcurrency,
+            runtime_policy_profile: runtimePolicyProfile,
+            runtime_policy_grants: runtimePolicyGrants && typeof runtimePolicyGrants === 'object' ? runtimePolicyGrants : {},
+            summary: '',
+            error: null,
+            delivered_to_parent: false,
+            delivery_path: null,
+            run_dir: null,
+            workspace_dir: workspaceDir,
+            result_path: null,
+            messages_path: null,
+            trace_path: null
+        };
+        this.privateRuns.set(runId, { request, status, result: null });
+        return this.getRun(runId);
+    }
+
     getRun(runId) {
+        const privateRun = this.privateRuns.get(String(runId));
+        if (privateRun) {
+            return {
+                ...privateRun.request,
+                ...privateRun.status,
+                result: privateRun.result || null
+            };
+        }
+
         const requestPath = path.join(this.runsPath, String(runId), 'request.json');
         if (!fs.existsSync(requestPath)) {
             return null;
@@ -160,17 +283,31 @@ class SubtaskRuntime {
             status = null
         } = filters;
 
-        if (!fs.existsSync(this.runsPath)) {
-            return [];
-        }
-
-        const runs = fs.readdirSync(this.runsPath, { withFileTypes: true })
+        const persistedRuns = fs.existsSync(this.runsPath)
+            ? fs.readdirSync(this.runsPath, { withFileTypes: true })
             .filter(entry => entry.isDirectory())
-            .map(entry => this.getRun(entry.name))
+            .map(entry => {
+                try {
+                    return this.getRun(entry.name);
+                } catch (error) {
+                    console.error(`[SubtaskRuntime] Failed to read run "${entry.name}":`, error.message);
+                    return null;
+                }
+            })
             .filter(Boolean)
             .filter(run => parentSessionId === null || String(run.parent_session_id) === String(parentSessionId))
             .filter(run => subagentId === null || Number(run.subagent_id) === Number(subagentId))
             .filter(run => status === null || String(run.status) === String(status))
+            : [];
+
+        const privateRuns = Array.from(this.privateRuns.keys())
+            .map(runId => this.getRun(runId))
+            .filter(Boolean)
+            .filter(run => parentSessionId !== null && String(run.parent_session_id) === String(parentSessionId))
+            .filter(run => subagentId === null || Number(run.subagent_id) === Number(subagentId))
+            .filter(run => status === null || String(run.status) === String(status));
+
+        const runs = [...privateRuns, ...persistedRuns]
             .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
 
         return runs.slice(0, Math.max(1, Number(limit) || 20));
@@ -266,7 +403,40 @@ class SubtaskRuntime {
         return { success: failed === 0, removed, kept, failed };
     }
 
+    clearPrivateRunsForSession(sessionId) {
+        if (!sessionId) {
+            return { success: true, removed: 0 };
+        }
+        let removed = 0;
+        for (const [runId, record] of Array.from(this.privateRuns.entries())) {
+            const run = this.getRun(runId);
+            if (
+                String(run?.parent_session_id || '') !== String(sessionId)
+                && String(run?.child_session_id || '') !== String(sessionId)
+            ) {
+                continue;
+            }
+            if (this.sessionWorkspace && run?.child_session_id) {
+                this.sessionWorkspace.cleanup(run.child_session_id);
+            }
+            this.privateRuns.delete(record.request.run_id);
+            removed++;
+        }
+        return { success: true, removed };
+    }
+
     updateStatus(runId, patch = {}) {
+        const privateRecord = this.privateRuns.get(String(runId));
+        if (privateRecord) {
+            privateRecord.status = {
+                ...privateRecord.status,
+                ...patch,
+                run_id: privateRecord.request.run_id,
+                updated_at: new Date().toISOString()
+            };
+            return this.getRun(runId);
+        }
+
         const run = this.getRun(runId);
         if (!run) {
             throw new Error(`Subtask run not found: ${runId}`);
@@ -291,6 +461,16 @@ class SubtaskRuntime {
     }
 
     appendMessage(runId, message) {
+        if (this.privateRuns.has(String(runId))) {
+            return {
+                timestamp: new Date().toISOString(),
+                type: 'message',
+                role: message.role || 'system',
+                content: '',
+                metadata: { private_trace_suppressed: true }
+            };
+        }
+
         const run = this.getRun(runId);
         if (!run) {
             throw new Error(`Subtask run not found: ${runId}`);
@@ -310,6 +490,16 @@ class SubtaskRuntime {
     }
 
     appendToolEvent(runId, event) {
+        if (this.privateRuns.has(String(runId))) {
+            return {
+                timestamp: new Date().toISOString(),
+                type: 'tool',
+                tool_name: event.tool_name,
+                success: event.success !== false,
+                private_trace_suppressed: true
+            };
+        }
+
         const run = this.getRun(runId);
         if (!run) {
             throw new Error(`Subtask run not found: ${runId}`);
@@ -334,6 +524,27 @@ class SubtaskRuntime {
     }
 
     completeRun(runId, completion) {
+        const privateRecord = this.privateRuns.get(String(runId));
+        if (privateRecord) {
+            const payload = {
+                run_id: privateRecord.request.run_id,
+                completed_at: new Date().toISOString(),
+                contract: completion.contract,
+                artifacts: completion.artifacts || completion.contract?.artifacts || [],
+                raw_response: '',
+                summary: completion.contract?.summary || '',
+                private: true
+            };
+            privateRecord.result = payload;
+            this.updateStatus(runId, {
+                status: completion.contract?.status || 'completed',
+                summary: completion.contract?.summary || '',
+                error: null,
+                completed_at: payload.completed_at
+            });
+            return this.getRun(runId);
+        }
+
         const run = this.getRun(runId);
         if (!run) {
             throw new Error(`Subtask run not found: ${runId}`);
@@ -366,6 +577,25 @@ class SubtaskRuntime {
     }
 
     failRun(runId, error) {
+        const privateRecord = this.privateRuns.get(String(runId));
+        if (privateRecord) {
+            const message = String(error || 'Unknown error');
+            const completedAt = new Date().toISOString();
+            privateRecord.result = {
+                run_id: privateRecord.request.run_id,
+                completed_at: completedAt,
+                error: message,
+                private: true
+            };
+            this.updateStatus(runId, {
+                status: 'failed',
+                summary: '',
+                error: message,
+                completed_at: completedAt
+            });
+            return this.getRun(runId);
+        }
+
         const run = this.getRun(runId);
         if (!run) {
             throw new Error(`Subtask run not found: ${runId}`);
@@ -392,6 +622,26 @@ class SubtaskRuntime {
     }
 
     cancelRun(runId, reason = 'Stopped by user') {
+        const privateRecord = this.privateRuns.get(String(runId));
+        if (privateRecord) {
+            const message = String(reason || 'Stopped by user');
+            const completedAt = new Date().toISOString();
+            privateRecord.result = {
+                run_id: privateRecord.request.run_id,
+                completed_at: completedAt,
+                stopped: true,
+                reason: message,
+                private: true
+            };
+            this.updateStatus(runId, {
+                status: 'stopped',
+                summary: message,
+                error: null,
+                completed_at: completedAt
+            });
+            return this.getRun(runId);
+        }
+
         const run = this.getRun(runId);
         if (!run) {
             throw new Error(`Subtask run not found: ${runId}`);
@@ -425,6 +675,52 @@ class SubtaskRuntime {
         }
 
         const parentSessionId = String(run.parent_session_id);
+        if (run.private === true || isPrivateSessionId(parentSessionId)) {
+            const deliveryId = `private-delivery-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const record = {
+                private: true,
+                delivery_id: deliveryId,
+                created_at: new Date().toISOString(),
+                parent_session_id: run.parent_session_id,
+                run_id: run.run_id,
+                child_session_id: run.child_session_id,
+                subagent_id: run.subagent_id,
+                identifiers: buildSubagentIdentifiers(run),
+                agent_name: run.agent_name,
+                run_dir: null,
+                result_path: null,
+                status: delivery.status,
+                summary: delivery.summary,
+                contract_type: run.contract_type,
+                delivered_to_parent: false,
+                consumed_at: null,
+                contract: delivery.contract,
+                delivery_path: null
+            };
+            const conversationWriter = this.persistConversationMessage || null;
+            if (conversationWriter) {
+                await conversationWriter({
+                    role: 'system',
+                    content: this._buildParentDeliveryMessage(run, record),
+                    metadata: {
+                        private: true,
+                        subtask_delivery: {
+                            delivery_id: deliveryId,
+                            run_id: run.run_id,
+                            contract_type: run.contract_type
+                        }
+                    }
+                }, parentSessionId);
+                record.delivered_to_parent = true;
+                this.updateStatus(run.run_id, {
+                    delivered_to_parent: true,
+                    delivery_path: null
+                });
+                this.notifyConversationUpdate?.(parentSessionId);
+            }
+            return record;
+        }
+
         const inboxDir = path.join(this.inboxesPath, parentSessionId);
         ensureDir(inboxDir);
 
@@ -552,6 +848,19 @@ class SubtaskRuntime {
     _buildParentDeliveryMessage(run, delivery) {
         const contractBlock = this._formatParentDeliveryContract(delivery?.contract, delivery);
         const identifiers = buildSubagentIdentifiers(run);
+        if (run.private === true || delivery?.private === true) {
+            return [
+                `Private sub-agent "${run.agent_name}" completed a delegated task.`,
+                `Status: ${delivery.status}`,
+                `Summary: ${delivery.summary}`,
+                `Run ID: ${identifiers.run_id || 'n/a'}`,
+                '',
+                'Structured Result:',
+                '```json',
+                contractBlock,
+                '```'
+            ].join('\n');
+        }
 
         return [
             `Sub-agent "${run.agent_name}" completed a delegated task.`,
@@ -620,6 +929,10 @@ class SubtaskRuntime {
 
     _generateRunId() {
         return generateRunId('subtask');
+    }
+
+    _generatePrivateRunId() {
+        return `private-${generateRunId('subtask')}`;
     }
 
     _readJson(filePath) {

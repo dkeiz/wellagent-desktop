@@ -49,7 +49,7 @@
 }
 
 .context-usage {
-    font-size: 0.85rem;
+    font-size: var(--top-tab-font-size);
     font-weight: 500;
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
@@ -123,6 +123,44 @@
 .message.loading {
     opacity: 0.6;
     font-style: italic;
+}
+
+.tool-call-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin: 0.25rem 0 0.35rem;
+    max-width: min(760px, 92%);
+}
+
+.tool-call-preview-item {
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--primary-color);
+    border-radius: var(--border-radius);
+    background: color-mix(in srgb, var(--card-bg), var(--bg-secondary) 35%);
+    padding: 0.45rem 0.55rem;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    color: var(--text-secondary);
+}
+
+.tool-call-preview-item.success {
+    border-left-color: var(--success);
+}
+
+.tool-call-preview-item.error {
+    border-left-color: var(--danger);
+}
+
+.tool-call-preview-title {
+    color: var(--text-primary);
+    font-weight: 600;
+    margin-bottom: 0.15rem;
+}
+
+.tool-call-preview-params,
+.tool-call-preview-result {
+    overflow-wrap: anywhere;
 }
 
 .agent-chat-ui-panel {
@@ -693,6 +731,11 @@ button.agent-file-row:hover {
     display: flex;
     gap: 0.4rem;
     justify-content: flex-end;
+}
+
+.superagent-manager-visibility.active {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
 }
 
 .subagent-manager-status,

@@ -116,7 +116,7 @@ async function testPreemptionSignal() {
   assert(ai.stopCalls >= 1, 'Expected stopGeneration to be called for preemption');
 }
 
-async function testUiContextOverridesSavedRuntimeContext() {
+async function testUiContextOverrideDoesNotPersistAsModelOverride() {
   const db = new MockDB();
   const model = 'kimi-k2.5:cloud';
   db.settings.set('llm.model', model);
@@ -142,8 +142,8 @@ async function testUiContextOverridesSavedRuntimeContext() {
   const savedOverrides = JSON.parse(db.settings.get('llm.modelOverrides'));
   assert.strictEqual(
     savedOverrides['ollama::kimi-k2.5:cloud'].contextWindow.value,
-    65536,
-    'Expected successful request context to be remembered for the active provider/model'
+    8192,
+    'Expected UI-selected request context not to overwrite saved per-model overrides'
   );
 }
 
@@ -151,7 +151,7 @@ async function main() {
   await testMessageAssemblyAndInjection();
   await testSerializationLock();
   await testPreemptionSignal();
-  await testUiContextOverridesSavedRuntimeContext();
+  await testUiContextOverrideDoesNotPersistAsModelOverride();
   console.log('[test-dispatcher-mocked] PASS');
 }
 

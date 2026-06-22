@@ -73,13 +73,16 @@ async function shutdownExternalApp(baseUrl) {
   } catch (_) {}
 }
 
-function startExternalApp({ rootDir, port }) {
+function startExternalApp({ rootDir, port, envOverrides = null }) {
   const baseUrl = `http://127.0.0.1:${port}`;
   const electronBinary = typeof require('electron') === 'string'
     ? require('electron')
     : process.execPath;
   const args = ['.', '--external-test', '--windowless', '--external-port', String(port)];
   const env = { ...process.env };
+  if (envOverrides && typeof envOverrides === 'object') {
+    Object.assign(env, envOverrides);
+  }
   delete env.ELECTRON_RUN_AS_NODE;
 
   const child = spawn(electronBinary, args, {

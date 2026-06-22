@@ -1,6 +1,26 @@
 const fs = require('fs');
 const path = require('path');
 
+const DEFAULT_THEME_TOKENS = [
+  '--main-bg',
+  '--sidebar-bg',
+  '--chat-bg',
+  '--card-bg',
+  '--bg-secondary',
+  '--bg-tertiary',
+  '--text-primary',
+  '--text-secondary',
+  '--text-muted',
+  '--text-color',
+  '--border-color',
+  '--hover-bg',
+  '--active-bg',
+  '--primary-color',
+  '--user-msg-bg',
+  '--user-msg-text',
+  '--input-bg'
+];
+
 function read(filePath) {
   return fs.readFileSync(filePath, 'utf8');
 }
@@ -16,12 +36,21 @@ function hasPattern(text, regex) {
 function runApplySimulation(rootDir = process.cwd(), logger = console) {
   const rendererRoot = path.join(rootDir, 'src', 'renderer');
   const manifestPath = path.join(rendererRoot, 'skins', 'manifest.json');
+  const contractPath = path.join(rendererRoot, 'skins', 'contract.json');
   if (!fileExists(manifestPath)) {
     logger.error(`[apply-sim] Missing manifest: ${manifestPath}`);
     return { ok: false, errors: ['missing-manifest'], cases: [] };
   }
+  if (!fileExists(contractPath)) {
+    logger.error(`[apply-sim] Missing contract: ${contractPath}`);
+    return { ok: false, errors: ['missing-contract'], cases: [] };
+  }
 
   const manifest = JSON.parse(read(manifestPath));
+  const contract = JSON.parse(read(contractPath));
+  const requiredThemeTokens = Array.isArray(contract.requiredThemeTokens) && contract.requiredThemeTokens.length
+    ? contract.requiredThemeTokens
+    : DEFAULT_THEME_TOKENS;
   const skins = (manifest.skins || []).filter((skin) => skin.compatible && skin.id !== 'default');
   const cases = [];
   const errors = [];
@@ -42,12 +71,12 @@ function runApplySimulation(rootDir = process.cwd(), logger = console) {
         new RegExp(`html\\[data-active-skin="${skin.id}"\\]\\[data-theme="${theme}"\\]`)
       );
       const themeTokenOk = hasPattern(themeText, /--skin-theme-id\s*:\s*[^;]+;/);
-      const coreVarsOk =
-        hasPattern(themeText, /--main-bg\s*:\s*[^;]+;/) &&
-        hasPattern(themeText, /--sidebar-bg\s*:\s*[^;]+;/) &&
-        hasPattern(themeText, /--primary-color\s*:\s*[^;]+;/);
+      const requiredThemeTokensOk = requiredThemeTokens.every((token) => {
+        const escapedToken = token.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+        return hasPattern(themeText, new RegExp(`${escapedToken}\\s*:\\s*[^;]+;`));
+      });
 
-      const ok = baseExists && baseSelectorOk && contractTokenOk && themeExists && themeSelectorOk && themeTokenOk && coreVarsOk;
+      const ok = baseExists && baseSelectorOk && contractTokenOk && themeExists && themeSelectorOk && themeTokenOk && requiredThemeTokensOk;
       const item = {
         skin: skin.id,
         theme,
@@ -59,7 +88,7 @@ function runApplySimulation(rootDir = process.cwd(), logger = console) {
           themeExists,
           themeSelectorOk,
           themeTokenOk,
-          coreVarsOk
+          requiredThemeTokensOk
         }
       };
       cases.push(item);

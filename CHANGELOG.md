@@ -2,6 +2,56 @@
 
 All notable changes to LocalAgent Desktop will be documented in this file.
 
+## [0.1.0-beta.1] — 2026-05-28
+
+### 🔄 First Public Beta
+
+Promoted from alpha to beta after addressing release readiness review findings.
+
+### Security & Hardening
+- Electron renderer now runs with `nodeIntegration: false` and `contextIsolation: true`
+- Renderer communicates through isolated preload bridge (`contextBridge`)
+- Remote Gateway shared secret now uses credential storage with legacy setting migration
+- `sandbox: false` remains — full sandboxing is tracked for future hardening
+- Removed tracked A2A runtime artifacts and Python bytecode from repository
+
+### Plugin System
+- Pixel Avatar: preset-based character system (generated-cat, generated-robot, generated-girl, pixel-cat, pixel-default)
+- Pixel Avatar: emotion presets (balanced, expressive, markers, neutral)
+- Plugin setup UI rendering via `renderSetupUI` hook
+- Plugin agent UI service for agent-scoped plugin panels
+- Enriched plugin handler params with agent context
+
+### Agent & Subagent
+- Agent subagent contract methods extracted to dedicated module
+- Agent subagent run methods extracted to dedicated module
+- Agent batch invoker for provider-aware parallel execution
+
+### Infrastructure
+- Release readiness review process and documentation
+- `.env.example` template for environment setup
+- Cleaner `.gitignore` and `.dockerignore` with runtime artifact exclusions
+- Line-budget contract with soft warning threshold
+- Desktop packaging now bundles curated `agentin` defaults instead of raw runtime state
+- `wellbot` npm package metadata now declares repository and homepage
+
+### Bug Fixes
+- Fixed `getConversations()` ignoring `limit` parameter
+- Fixed `updateCustomTool()` not persisting `code` or `input_schema` changes
+- Fixed stale Companion Browser pairing contract expectations
+- Fixed `addPromptRule()` returning hardcoded `active: false`
+- Fixed `deleteAgent()` not cleaning up agent folders and sessions
+- Fixed invalid CORS literal and request timeout leak in `PortListenerManager`
+- Removed redundant `require()` calls inside IPC handlers
+- Removed dead code: `getAgentFolderPathById()`, `isEchoingResult()`
+- Split Pixel Avatar renderer by shared helpers and character renderers
+
+### Known Issues
+- Electron runs with `sandbox: false` (full sandboxing tracked for hardening)
+- Tool chain has no context window truncation
+
+---
+
 ## [0.1.0-alpha] — 2026-04-26
 
 ### 🎉 Initial Alpha Release
@@ -70,8 +120,8 @@ First public alpha release for community testing.
 - 35+ contract tests across 6 suite levels
 - Docker support for headless testing
 
-### Known Issues
-- Electron runs with `nodeIntegration: true` (security hardening planned)
+### Known Issues (Alpha)
+- ~~Electron runs with `nodeIntegration: true`~~ (fixed in beta — now `false` with `contextIsolation: true`)
 - Rule manager uses innerHTML (XSS surface)
 - Tool chain has no context window truncation
 - Vector store/embeddings exist but are not wired to knowledge search

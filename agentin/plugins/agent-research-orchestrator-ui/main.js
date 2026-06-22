@@ -707,6 +707,9 @@ module.exports = {
             renderPanel,
             css,
             actions: {
+                refresh({ agentInfo }) {
+                    return { success: true, html: renderPanel(agentInfo), css };
+                },
                 'set-view-mode'({ agentInfo, payload }) {
                     const state = getAgentState(agentInfo);
                     state.viewMode = normalizeMode(payload.viewMode);

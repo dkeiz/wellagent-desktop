@@ -143,6 +143,7 @@ function buildContainer() {
     promptFileManager: { syncToFiles: async () => {}, getPaths: () => ({}), syncFromFiles: async () => {}, loadSystemPrompt: async () => 'x', saveSystemPrompt: async () => {}, loadRulesFromFiles: async () => [] },
     agentLoop: { onSessionClose: async () => {}, recordActivity() {}, loadMemoryContext: async () => null, getSession: () => ({ autoMemory: false, idleSeconds: 0 }) },
     connectorRuntime: { listConnectors: async () => [], startConnector: async () => ({}), stopConnector: async () => ({}), getLogs: () => [] },
+    sessionWorkspace: { getWorkspacePath: () => null, listFiles: () => [] },
     dispatcher: { dispatch: async () => ({ content: 'ok' }) },
     agentManager: { getAgents: async () => [], getAgent: async () => null, createAgent: async () => ({}), updateAgent: async () => ({}), deleteAgent: async () => ({}), activateAgent: async () => ({}), deactivateAgent: async () => {}, compactAgent: async () => {} },
     eventBus: { publish() {}, getLog: () => [] },
@@ -165,7 +166,7 @@ async function main() {
 
   const onceResult = await ipcMain.invoke('execute-mcp-tool-once', 'read_file', { path: 'x' });
   assert.strictEqual(onceResult.success, true, 'execute-mcp-tool-once should succeed');
-  assert.strictEqual(getLastExecuteCall().options.bypassPermissions, true, 'execute-mcp-tool-once should bypass permissions');
+  assert.notStrictEqual(getLastExecuteCall().options.bypassPermissions, true, 'execute-mcp-tool-once should not bypass permissions');
 
   const toolData = {
     name: 'custom_demo_tool',

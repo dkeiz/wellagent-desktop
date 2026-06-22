@@ -1,10 +1,10 @@
 const TtsService = require('../tts-service');
 
 function registerTtsHandlers(ipcMain, runtime) {
-  const service = new TtsService({
+  const service = runtime.container?.optional?.('ttsService') || new TtsService({
     db: runtime.db,
     pluginManager: runtime.pluginManager,
-    agentManager: runtime.agentManager
+    agentManager: runtime.agentManager,
   });
 
   ipcMain.handle('tts:get-settings', async () => service.getSettings());
@@ -29,6 +29,10 @@ function registerTtsHandlers(ipcMain, runtime) {
 
   ipcMain.handle('tts:speak', async (event, params = {}) => {
     return service.speak(params || {});
+  });
+
+  ipcMain.handle('tts:speak-audio', async (event, params = {}) => {
+    return service.speakAudio(params || {});
   });
 
   ipcMain.handle('tts:stop', async (event, params = {}) => {

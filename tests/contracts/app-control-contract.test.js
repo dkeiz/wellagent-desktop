@@ -7,7 +7,7 @@ module.exports = {
   async run({ assert, rootDir }) {
     const handlerPath = path.join(rootDir, 'src', 'main', 'ipc', 'register-app-control-handlers.js');
     const originalLoad = Module._load;
-    const calls = { reloads: 0, relaunches: 0, quits: 0 };
+    const calls = { reloads: 0, relaunches: 0, quits: 0, opened: [] };
     const sender = { id: 'renderer-webcontents' };
     const ownerWindow = {
       webContents: {
@@ -31,6 +31,11 @@ module.exports = {
           BrowserWindow: {
             fromWebContents(target) {
               return target === sender ? ownerWindow : null;
+            }
+          },
+          shell: {
+            async openExternal(url) {
+              calls.opened.push(url);
             }
           }
         };
@@ -59,5 +64,12 @@ module.exports = {
     await new Promise(resolve => setTimeout(resolve, 60));
     assert.equal(calls.relaunches, 1, 'Expected restart IPC to relaunch the app once');
     assert.equal(calls.quits, 1, 'Expected restart IPC to quit the app once');
+
+    const openResult = await handlers.get('shell:open-external')({}, 'https://example.com/docs');
+    assert.equal(openResult.success, true, 'Expected allowed external URL to open');
+    assert.deepEqual(calls.opened, ['https://example.com/docs'], 'Expected shell openExternal to receive normalized URL');
+
+    const deniedResult = await handlers.get('shell:open-external')({}, 'file:///tmp/secret.txt');
+    assert.equal(deniedResult.success, false, 'Expected disallowed external URL protocol to be denied');
   }
 };

@@ -14,6 +14,7 @@ module.exports = {
     assert.ok(server.tools.has('run_command'), 'Expected run_command to be registered');
     assert.ok(server.tools.has('current_time'), 'Expected current_time to be registered');
     assert.ok(server.tools.has('search_workspace'), 'Expected search_workspace to be registered');
+    assert.ok(server.tools.has('execution_root'), 'Expected execution_root to be registered');
 
     let duplicateError = null;
     try {

@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { buildRuntimePaths } = require('./runtime-paths');
 
 /**
  * SessionWorkspace — Per-session temp folder manager.
@@ -12,7 +13,7 @@ const path = require('path');
  */
 class SessionWorkspace {
     constructor(basePath = null) {
-        this.basePath = basePath || path.join(__dirname, '../../agentin/workspaces');
+        this.basePath = path.resolve(basePath || buildRuntimePaths().sessionWorkspaceBase);
         this._ensureBase();
     }
 
@@ -22,11 +23,41 @@ class SessionWorkspace {
         }
     }
 
+    _normalizeSessionId(sessionId) {
+        const normalized = String(sessionId ?? '').trim();
+        if (!normalized) {
+            throw new Error('Session workspace requires a session id');
+        }
+        if (normalized === '.' || normalized === '..') {
+            throw new Error('Invalid session workspace id');
+        }
+        if (path.isAbsolute(normalized) || normalized.includes('/') || normalized.includes('\\')) {
+            throw new Error('Invalid session workspace id');
+        }
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(normalized)) {
+            throw new Error('Invalid session workspace id');
+        }
+        return normalized;
+    }
+
+    _assertInsideBase(resolvedPath) {
+        const base = this.basePath.endsWith(path.sep) ? this.basePath : `${this.basePath}${path.sep}`;
+        if (resolvedPath !== this.basePath && !resolvedPath.startsWith(base)) {
+            throw new Error('Session workspace path escaped base directory');
+        }
+        return resolvedPath;
+    }
+
+    _resolveWorkspacePath(sessionId) {
+        const safeSessionId = this._normalizeSessionId(sessionId);
+        return this._assertInsideBase(path.resolve(this.basePath, safeSessionId));
+    }
+
     /**
      * Get (and create) the workspace directory for a session.
      */
     getWorkspacePath(sessionId) {
-        const dir = path.join(this.basePath, String(sessionId));
+        const dir = this._resolveWorkspacePath(sessionId);
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
@@ -53,7 +84,7 @@ class SessionWorkspace {
      * List all files in a session workspace.
      */
     listFiles(sessionId) {
-        const dir = path.join(this.basePath, String(sessionId));
+        const dir = this._resolveWorkspacePath(sessionId);
         if (!fs.existsSync(dir)) return [];
 
         return fs.readdirSync(dir)
@@ -108,7 +139,7 @@ class SessionWorkspace {
      * Delete an entire session workspace.
      */
     cleanup(sessionId) {
-        const dir = path.join(this.basePath, String(sessionId));
+        const dir = this._resolveWorkspacePath(sessionId);
         if (fs.existsSync(dir)) {
             fs.rmSync(dir, { recursive: true, force: true });
             console.log(`[SessionWorkspace] Cleaned up workspace for session ${sessionId}`);

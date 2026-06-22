@@ -59,6 +59,8 @@ function normalizeInvokeOptions(task, provider) {
         expectedOutput: task.expectedOutput || task.expected_output || opts.expectedOutput || opts.expected_output,
         subagentMode: task.subagentMode || task.subagent_mode || opts.subagentMode || opts.subagent_mode,
         permissionsContract: task.permissionsContract || task.permissions_contract || opts.permissionsContract || opts.permissions_contract || null,
+        runtimePolicyProfile: task.runtimePolicyProfile || task.runtime_policy_profile || opts.runtimePolicyProfile || opts.runtime_policy_profile || 'strict-subagent',
+        runtimePolicyGrants: task.runtimePolicyGrants || task.runtime_policy_grants || opts.runtimePolicyGrants || opts.runtime_policy_grants || {},
         provider,
         concurrencyMode,
         concurrency_mode: concurrencyMode,

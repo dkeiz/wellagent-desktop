@@ -3,8 +3,6 @@
  * Loads plugin list via IPC, renders items with enable/disable toggles.
  */
 (function () {
-    const { ipcRenderer } = require('electron');
-
     class PluginPanel {
         constructor() {
             this.listEl = document.getElementById('plugins-list');
@@ -29,7 +27,8 @@
                     if (!widget) return;
 
                     if (clickedCollapseArrow) {
-                        widget.classList.toggle('collapsed');
+                        const collapsed = widget.classList.toggle('collapsed');
+                        window.LocalAgentLayoutMode?.setSidebarSectionCollapsed?.('plugins', collapsed);
                         return;
                     }
 
@@ -42,7 +41,7 @@
                 });
             }
 
-            window.electronAPI.on('plugins:state-changed', async () => {
+            window.electronAPI.onPluginStateChanged(async () => {
                 await this.load();
             });
         }
@@ -50,7 +49,7 @@
         async load() {
             try {
                 await window.electronAPI.plugins.scan();
-                this.plugins = await ipcRenderer.invoke('plugins:list');
+                this.plugins = await window.electronAPI.plugins.list();
                 this.render();
             } catch (e) {
                 console.error('[PluginPanel] Failed to load plugins:', e);
@@ -61,15 +60,17 @@
             if (!this.listEl) return;
             this.listEl.replaceChildren();
 
-            if (this.plugins.length === 0) {
+            const visiblePlugins = this.plugins.filter((plugin) => plugin.visibleInSidebar !== false);
+
+            if (this.plugins.length === 0 || visiblePlugins.length === 0) {
                 const empty = document.createElement('div');
                 empty.className = 'no-plugins';
-                empty.textContent = 'No plugins installed';
+                empty.textContent = this.plugins.length === 0 ? 'No plugins installed' : 'No plugins shown';
                 this.listEl.appendChild(empty);
                 return;
             }
 
-            this.plugins.forEach((plugin) => {
+            visiblePlugins.forEach((plugin) => {
                 const item = document.createElement('div');
                 item.className = 'plugin-item';
                 item.dataset.id = plugin.id;
@@ -107,9 +108,9 @@
                     try {
                         let result;
                         if (currentStatus === 'enabled') {
-                            result = await ipcRenderer.invoke('plugins:disable', id);
+                            result = await window.electronAPI.plugins.disable(id);
                         } else {
-                            result = await ipcRenderer.invoke('plugins:enable', id);
+                            result = await window.electronAPI.plugins.enable(id);
                         }
                         if (!result?.success) {
                             throw new Error(result?.error || 'Plugin toggle failed');

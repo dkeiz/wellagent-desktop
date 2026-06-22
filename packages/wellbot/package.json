@@ -1,0 +1,33 @@
+{
+  "name": "wellbot",
+  "version": "0.1.0-beta.1",
+  "description": "CLI for installing, updating, and launching LocalAgent Desktop from source.",
+  "license": "MIT",
+  "author": "LocalAgent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dkeiz/wellagent-desktop.git",
+    "directory": "packages/wellbot"
+  },
+  "homepage": "https://github.com/dkeiz/wellagent-desktop#readme",
+  "bin": {
+    "wellbot": "bin/wellbot.js"
+  },
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "desktop",
+    "local-first",
+    "wellbot"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
+
+

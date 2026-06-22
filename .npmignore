@@ -1,0 +1,6 @@
+# The repository root is the Electron desktop app and is private.
+# Publish npm packages from packages/* instead.
+*
+!package.json
+!README.md
+!LICENSE

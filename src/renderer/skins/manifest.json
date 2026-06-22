@@ -7,7 +7,11 @@
       "name": "Default",
       "compatible": true,
       "description": "Current production skin with existing layout and behavior.",
-      "supportedThemes": ["light", "solar", "dark"],
+      "supportedThemes": [
+        "light",
+        "solar",
+        "dark"
+      ],
       "themeLabels": {
         "light": "Light",
         "solar": "Sunburst",
@@ -25,7 +29,11 @@
       "compatible": true,
       "description": "Glassmorphism-inspired concept adapted to the current DOM contract.",
       "source": "ui-concepts/designA.html",
-      "supportedThemes": ["light", "solar", "dark"],
+      "supportedThemes": [
+        "light",
+        "solar",
+        "dark"
+      ],
       "defaultTheme": "dark",
       "themeLabels": {
         "light": "Cloud",
@@ -39,12 +47,39 @@
       }
     },
     {
+      "id": "design-d",
+      "name": "Design D (Borderless)",
+      "compatible": true,
+      "description": "Minimalist, borderless AI interface pattern with floating inputs.",
+      "source": "ui-concepts/designD.html",
+      "supportedThemes": [
+        "light",
+        "dark",
+        "solar"
+      ],
+      "defaultTheme": "dark",
+      "themeLabels": {
+        "light": "Clean",
+        "dark": "Midnight",
+        "solar": "Sepia"
+      },
+      "preview": {
+        "base": "#212121",
+        "sidebar": "#171717",
+        "accent": "#ffffff"
+      }
+    },
+    {
       "id": "design-ac",
       "name": "Design AC (Hacker)",
       "compatible": true,
       "description": "Terminal-like glass style with matrix-friendly color options.",
       "source": "ui-concepts/designAC.html",
-      "supportedThemes": ["light", "solar", "dark"],
+      "supportedThemes": [
+        "light",
+        "solar",
+        "dark"
+      ],
       "defaultTheme": "dark",
       "themeLabels": {
         "light": "Ice",
@@ -63,7 +98,11 @@
       "compatible": true,
       "description": "Hard-edged brutalist styling adapted for runtime skin swaps.",
       "source": "ui-concepts/designBC.html",
-      "supportedThemes": ["light", "solar", "dark"],
+      "supportedThemes": [
+        "light",
+        "solar",
+        "dark"
+      ],
       "defaultTheme": "light",
       "themeLabels": {
         "light": "Paper",
@@ -78,60 +117,71 @@
     },
     {
       "id": "design-b",
-      "name": "Design B (Layout Prototype)",
-      "compatible": false,
-      "description": "Prototype uses alternate tab IDs (tab-*) and requires layout adapter.",
+      "name": "Design B (Slate Soft)",
+      "compatible": true,
+      "description": "Soft slate styling with rounded controls and gentle contrast.",
       "source": "ui-concepts/designB.html",
-      "supportedThemes": ["light", "solar", "dark"],
+      "supportedThemes": [
+        "light",
+        "solar",
+        "dark"
+      ],
+      "defaultTheme": "dark",
+      "themeLabels": {
+        "light": "Mist",
+        "solar": "Amber",
+        "dark": "Graphite"
+      },
       "preview": {
-        "base": "#f5f5f7",
-        "sidebar": "#ffffff",
-        "accent": "#0066cc"
+        "base": "#1b212d",
+        "sidebar": "#232b3a",
+        "accent": "#4f80ff"
       }
     },
     {
       "id": "design-c",
-      "name": "Design C (Layout Prototype)",
-      "compatible": false,
-      "description": "Prototype requires alternate skeleton DOM and tab structure.",
+      "name": "Design C (Signal Frame)",
+      "compatible": true,
+      "description": "Structured signal palette with crisp borders and compact controls.",
       "source": "ui-concepts/designC.html",
-      "supportedThemes": ["light", "solar", "dark"],
+      "supportedThemes": [
+        "light",
+        "solar",
+        "dark"
+      ],
+      "defaultTheme": "dark",
+      "themeLabels": {
+        "light": "Polar",
+        "solar": "Copper",
+        "dark": "Signal"
+      },
       "preview": {
-        "base": "#111111",
-        "sidebar": "#1b1b1b",
-        "accent": "#ff5f00"
+        "base": "#0f151f",
+        "sidebar": "#161f2d",
+        "accent": "#ff7a2f"
       }
     },
     {
       "id": "design-ab",
-      "name": "Design AB (Layout Prototype)",
-      "compatible": false,
-      "description": "Prototype is not yet bound to current production DOM contract.",
-      "source": "ui-concepts/designAB.html",
-      "supportedThemes": ["light", "solar", "dark"],
-      "preview": {
-        "base": "#111827",
-        "sidebar": "#1f2937",
-        "accent": "#34d399"
-      }
-    },
-    {
-      "id": "design-d",
-      "name": "Design D (Borderless)",
+      "name": "Design AB (Aurora Blend)",
       "compatible": true,
-      "description": "Minimalist, borderless AI interface pattern with floating inputs.",
-      "source": "ui-concepts/designD.html",
-      "supportedThemes": ["light", "dark", "solar"],
-      "defaultTheme": "dark",
+      "description": "Balanced aurora accents with smooth cards and calm surfaces.",
+      "source": "ui-concepts/designAB.html",
+      "supportedThemes": [
+        "light",
+        "solar",
+        "dark"
+      ],
+      "defaultTheme": "light",
       "themeLabels": {
-        "light": "Clean",
-        "dark": "Midnight",
-        "solar": "Sepia"
+        "light": "Dawn",
+        "solar": "Grove",
+        "dark": "Night Bloom"
       },
       "preview": {
-        "base": "#212121",
-        "sidebar": "#171717",
-        "accent": "#ffffff"
+        "base": "#f3f6ff",
+        "sidebar": "#e7eefc",
+        "accent": "#35b89d"
       }
     }
   ]

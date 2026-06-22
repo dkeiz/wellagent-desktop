@@ -139,6 +139,13 @@
   box-shadow: var(--shadow-sm);
 }
 
+#api-tab .llm-settings.provider-scroll-enabled {
+  max-height: calc(100vh - 190px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
+}
+
 #api-tab .provider-config {
   display: flex;
   flex-direction: column;

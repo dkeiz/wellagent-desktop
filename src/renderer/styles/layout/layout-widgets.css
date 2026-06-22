@@ -14,7 +14,7 @@
 .widget-stack {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: var(--sidebar-section-gap, 10px);
     min-height: 0;
 }
 
@@ -42,12 +42,12 @@
 }
 
 .calendar-dock-icon {
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
     line-height: 1;
 }
 
 .calendar-dock-date {
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
     font-weight: 600;
 }
 
@@ -84,7 +84,7 @@
 .agent-picker-widget {
     background-color: var(--main-bg);
     border-radius: var(--border-radius);
-    padding: 0.5rem;
+    padding: var(--space-3, 10px);
     border: 1px solid var(--border-color);
     flex-shrink: 0;
     display: flex;
@@ -95,7 +95,7 @@
 .agent-picker-widget h3 {
     margin: 0 0 0.5rem 0;
     color: var(--text-primary);
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
 }
 
 .agent-picker-header {
@@ -127,39 +127,79 @@
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    max-height: 200px;
+    max-height: 220px;
+    overflow: hidden;
 }
 
 .subagents-widget .widget-header {
-    padding: 0.5rem;
-    cursor: pointer;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: var(--sidebar-row-height, 30px);
+    height: var(--sidebar-row-height, 30px);
+    padding: 0;
+    cursor: default;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: stretch;
+    overflow: hidden;
     background-color: var(--bg-secondary);
-    border-bottom: 1px solid var(--border-color);
-    font-size: 0.9rem;
+    border-bottom: none;
+    font-size: var(--text-sm);
     font-weight: 600;
     border-radius: var(--border-radius) var(--border-radius) 0 0;
     transition: background-color 0.2s ease;
 }
 
 .subagents-widget .widget-header:hover {
+    background-color: var(--bg-secondary);
+}
+
+.subagents-widget .subagent-header-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 var(--sidebar-row-padding-x, 6px);
+    cursor: pointer;
+    transition: background-color 0.18s ease;
+}
+
+.subagents-widget .subagent-header-label:hover {
     background-color: var(--hover-bg);
 }
 
+.subagents-widget .collapse-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 26px;
+    padding: 0 0.45rem;
+    cursor: pointer;
+    color: var(--text-secondary);
+    transition: background-color 0.18s ease, color 0.18s ease;
+    border-left: 1px solid color-mix(in srgb, var(--border-color), transparent 25%);
+}
+
+.subagents-widget .collapse-arrow:hover {
+    background-color: var(--active-bg);
+    color: var(--text-primary);
+}
+
 .subagents-open-indicator {
-    font-size: 0.72rem;
+    font-size: var(--text-xs);
     font-weight: 600;
     color: var(--text-secondary);
     opacity: 0.85;
 }
 
 .subagents-widget .widget-content {
-    padding: 0.4rem;
+    padding: var(--sidebar-row-padding-x, 6px);
     overflow-y: auto;
     flex: 1;
     min-height: 0;
+}
+
+.subagents-widget.collapsed .widget-content {
+    display: none;
 }
 
 
@@ -366,19 +406,24 @@
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    max-height: 300px;
+    max-height: 220px;
+    overflow: hidden;
 }
 
 .workflows-widget .widget-header {
+    box-sizing: border-box;
+    width: 100%;
     padding: 0;
+    min-height: var(--sidebar-row-height, 30px);
+    height: var(--sidebar-row-height, 30px);
     cursor: default;
     display: grid;
     grid-template-columns: 1fr auto;
     align-items: stretch;
     overflow: hidden;
     background-color: var(--bg-secondary);
-    border-bottom: 1px solid var(--border-color);
-    font-size: 0.9rem;
+    border-bottom: none;
+    font-size: var(--text-sm);
     font-weight: 600;
     border-radius: var(--border-radius) var(--border-radius) 0 0;
 }
@@ -390,7 +435,7 @@
 .workflows-widget .workflow-header-label {
     display: flex;
     align-items: center;
-    padding: 0.5rem;
+    padding: 0 var(--sidebar-row-padding-x, 6px);
     cursor: pointer;
     transition: background-color 0.18s ease;
 }
@@ -405,22 +450,19 @@
     justify-content: center;
     min-width: 26px;
     padding: 0 0.45rem;
-    font-size: 0.7rem;
     cursor: pointer;
-    transition: transform 0.2s ease, background-color 0.18s ease;
+    color: var(--text-secondary);
+    transition: background-color 0.18s ease, color 0.18s ease;
     border-left: 1px solid color-mix(in srgb, var(--border-color), transparent 25%);
 }
 
 .workflows-widget .collapse-arrow:hover {
     background-color: var(--active-bg);
-}
-
-.workflows-widget.collapsed .collapse-arrow {
-    transform: rotate(-90deg);
+    color: var(--text-primary);
 }
 
 .workflows-widget .widget-content {
-    padding: 0.5rem;
+    padding: var(--sidebar-row-padding-x, 6px);
     overflow-y: auto;
     flex: 1;
     min-height: 0;
@@ -435,7 +477,7 @@
 .agent-picker-widget h3 {
     margin: 0 0 0.5rem 0;
     color: var(--text-primary);
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
 }
 
 /* Calendar header with navigation */

@@ -1,5 +1,9 @@
 const axios = require('axios');
 const BaseAdapter = require('./base-adapter');
+const { isProviderRequestCanceled, providerRequest } = require('./provider-http');
+
+const REQUEST_TIMEOUT_MS = 120000;
+const MODEL_LIST_TIMEOUT_MS = 15000;
 
 /**
  * LMStudioAdapter — LM Studio local server (OpenAI-compatible API).
@@ -8,13 +12,16 @@ const BaseAdapter = require('./base-adapter');
  * Supports thinking mode via <think> tags.
  */
 class LMStudioAdapter extends BaseAdapter {
-    constructor(db) {
+    constructor(db, options = {}) {
         super('lmstudio', db);
         this.baseURL = 'http://localhost:1234';
+        this._appliedLoadConfig = new Map();
+        this._onSoftAlert = typeof options.onSoftAlert === 'function' ? options.onSoftAlert : null;
+        this._softAlertCache = new Set();
     }
 
     async call(messages, options = {}) {
-        const signal = this._startRequest();
+        const { requestId, signal } = this._startRequest();
 
         // Load custom URL if saved
         const savedURL = await this.db.getSetting('llm.lmstudio.url');
@@ -32,9 +39,14 @@ class LMStudioAdapter extends BaseAdapter {
             model: options.model || '',
             messages: processedMessages,
             temperature: options.temperature || 0.7,
-            max_tokens: options.max_tokens || -1,
             stream: false
         };
+        // CRITICAL WARNING: DO NOT hardcode a default max_tokens (like 1000 or -1) here or anywhere in this adapter!
+        // Capping output tokens by default restricts the model output length and truncates responses.
+        // Let the API provider / model config decide output limits by default unless options.max_tokens is explicitly provided.
+        if (options.max_tokens != null) {
+            requestBody.max_tokens = options.max_tokens;
+        }
 
         const requestOverrides = options.runtimeConfig?.requestOverrides;
         if (requestOverrides && typeof requestOverrides === 'object' && !Array.isArray(requestOverrides)) {
@@ -45,27 +57,37 @@ class LMStudioAdapter extends BaseAdapter {
         }
 
         try {
-            const response = await axios.post(`${url}/v1/chat/completions`, requestBody, {
+            await this._ensureModelLoadConfig(url, options.model, options.runtimeConfig || {}, options.modelSpec || {});
+            const response = await providerRequest(axios, {
+                method: 'post',
+                url: this._buildEndpoint(url, '/chat/completions'),
+                data: requestBody,
                 signal,
                 headers: await this._getHeaders()
-            });
+            }, { timeoutMs: REQUEST_TIMEOUT_MS, label: 'LM Studio generation' });
 
-            this._endRequest();
+            this._endRequest(requestId);
             const message = response.data?.choices?.[0]?.message || {};
             const content = this._coerceContent(message.content);
             const reasoning = this._extractReasoning(message, response.data);
 
-            return this._normalizeResponse({
+            const normalized = this._normalizeResponse({
                 content,
                 reasoning,
                 model: response.data.model,
                 usage: response.data.usage,
                 context_length: options.runtimeConfig?.contextWindow?.value || options.modelSpec?.runtime?.contextWindow?.value
             });
+            const stats = response?.data?.stats || {};
+            const tps = Number(stats.tokensPerSecond ?? stats.tokens_per_second ?? response?.data?.tokensPerSecond ?? response?.data?.tokens_per_second);
+            if (Number.isFinite(tps) && tps > 0) {
+                normalized.tokens_per_second = tps;
+            }
+            return normalized;
         } catch (error) {
-            this._endRequest();
+            this._endRequest(requestId);
 
-            if (axios.isCancel(error) || error.name === 'AbortError' || error.code === 'ERR_CANCELED') {
+            if (isProviderRequestCanceled(axios, error)) {
                 return this._normalizeResponse({
                     content: '[Generation stopped by user]',
                     model: options.model,
@@ -80,16 +102,165 @@ class LMStudioAdapter extends BaseAdapter {
         try {
             const savedURL = await this.db.getSetting('llm.lmstudio.url');
             const url = savedURL || this.baseURL;
-            const response = await axios.get(`${url}/v1/models`);
-            return response.data.data.map(m => m.id);
+            const response = await providerRequest(axios, {
+                method: 'get',
+                url: this._buildEndpoint(url, '/models'),
+                headers: await this._getHeaders()
+            }, { timeoutMs: MODEL_LIST_TIMEOUT_MS, label: 'LM Studio model list' });
+
+            const payload = response.data || {};
+            const rawModels = Array.isArray(payload?.data)
+                ? payload.data
+                : (Array.isArray(payload?.models) ? payload.models : []);
+
+            return rawModels
+                .map(model => {
+                    if (typeof model === 'string') return model.trim();
+                    return String(model?.id || model?.name || '').trim();
+                })
+                .filter(Boolean);
         } catch (error) {
             console.error('[LMStudio] Failed to fetch models:', error.message);
             return [];
         }
     }
 
+    _buildNativeApiEndpoint(baseUrl, endpointPath) {
+        const rawBase = String(baseUrl || '').trim() || this.baseURL;
+        const rawPath = String(endpointPath || '').trim();
+        const normalizedPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+
+        let parsed;
+        try {
+            parsed = new URL(rawBase);
+            if (parsed.hostname === 'localhost') {
+                parsed.hostname = '127.0.0.1';
+            }
+        } catch (_) {
+            const fallback = rawBase.replace(/\/+$/, '');
+            return `${fallback}/api/v1${normalizedPath}`;
+        }
+
+        const pathname = (parsed.pathname || '/').replace(/\/+$/, '') || '/';
+        const basePath = pathname.endsWith('/v1')
+            ? pathname.slice(0, -3) || '/'
+            : pathname;
+        const trimmedBase = basePath.replace(/\/+$/, '');
+        parsed.pathname = `${trimmedBase === '' || trimmedBase === '/' ? '' : trimmedBase}/api/v1${normalizedPath}`;
+        return parsed.toString();
+    }
+
+    _extractLoadConfig(runtimeConfig = {}, modelSpec = {}) {
+        const loadConfig = runtimeConfig?.lmstudio?.loadConfig;
+        const scopedLoadConfig = (loadConfig && typeof loadConfig === 'object' && !Array.isArray(loadConfig))
+            ? loadConfig
+            : {};
+        const out = {};
+        if (typeof scopedLoadConfig.flash_attention === 'boolean') out.flash_attention = scopedLoadConfig.flash_attention;
+        const contextCandidate = scopedLoadConfig.context_length
+            ?? runtimeConfig?.contextWindow?.value
+            ?? modelSpec?.runtime?.contextWindow?.value;
+        const contextLength = Number.parseInt(contextCandidate, 10);
+        if (Number.isFinite(contextLength) && contextLength > 0) out.context_length = contextLength;
+        if (Number.isFinite(scopedLoadConfig.eval_batch_size)) out.eval_batch_size = Number(scopedLoadConfig.eval_batch_size);
+        if (Number.isFinite(scopedLoadConfig.num_experts)) out.num_experts = Number(scopedLoadConfig.num_experts);
+        if (typeof scopedLoadConfig.offload_kv_cache_to_gpu === 'boolean') out.offload_kv_cache_to_gpu = scopedLoadConfig.offload_kv_cache_to_gpu;
+        return Object.keys(out).length ? out : null;
+    }
+
+    async _ensureModelLoadConfig(baseUrl, model, runtimeConfig = {}, modelSpec = {}) {
+        const modelId = String(model || '').trim();
+        if (!modelId) return;
+        const loadConfig = this._extractLoadConfig(runtimeConfig, modelSpec);
+        if (!loadConfig) return;
+
+        const cacheKey = modelId.toLowerCase();
+        const signature = JSON.stringify(loadConfig);
+        if (this._appliedLoadConfig.get(cacheKey) === signature) return;
+
+        const payload = {
+            model: modelId,
+            ...loadConfig,
+            echo_load_config: true
+        };
+        const endpoint = this._buildNativeApiEndpoint(baseUrl, '/models/load');
+        try {
+            const response = await providerRequest(axios, {
+                method: 'post',
+                url: endpoint,
+                data: payload,
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(await this._getHeaders())
+                }
+            }, { timeoutMs: 30000, label: 'LM Studio model load config' });
+            const applied = response?.data?.load_config || {};
+            if (Object.prototype.hasOwnProperty.call(loadConfig, 'flash_attention')) {
+                const actual = applied.flash_attention;
+                if (actual !== loadConfig.flash_attention) {
+                    console.warn(`[LMStudio] Requested flash_attention=${loadConfig.flash_attention}, server applied=${actual}`);
+                    const alertKey = `${cacheKey}:flash_attention_mismatch:${actual}`;
+                    if (!this._softAlertCache.has(alertKey)) {
+                        this._softAlertCache.add(alertKey);
+                        this._emitSoftAlert(`LM Studio model "${modelId}" loaded with Flash Attention=${String(actual)}. Expected OFF. Check LM Studio load backend/settings.`, 'warning');
+                    }
+                }
+            }
+            this._appliedLoadConfig.set(cacheKey, signature);
+        } catch (error) {
+            console.warn(`[LMStudio] Model load config apply failed for ${modelId}: ${error.message}`);
+            const alertKey = `${cacheKey}:load_config_error:${error.message}`;
+            if (!this._softAlertCache.has(alertKey)) {
+                this._softAlertCache.add(alertKey);
+                this._emitSoftAlert(`LM Studio load-config check failed for "${modelId}": ${error.message}`, 'warning');
+            }
+        }
+    }
+
+    _emitSoftAlert(message, level = 'info') {
+        if (!this._onSoftAlert) return;
+        try {
+            this._onSoftAlert({
+                provider: 'lmstudio',
+                level,
+                message
+            });
+        } catch (_) {
+            // Do not fail inference on notification errors.
+        }
+    }
+
+    _buildEndpoint(baseUrl, endpointPath) {
+        const rawBase = String(baseUrl || '').trim() || this.baseURL;
+        const rawPath = String(endpointPath || '').trim();
+        const normalizedPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+
+        let parsed;
+        try {
+            parsed = new URL(rawBase);
+            if (parsed.hostname === 'localhost') {
+                parsed.hostname = '127.0.0.1';
+            }
+        } catch (_) {
+            const fallback = rawBase.replace(/\/+$/, '');
+            return `${fallback}/v1${normalizedPath}`;
+        }
+
+        const pathname = (parsed.pathname || '/').replace(/\/+$/, '') || '/';
+        const hasV1 = pathname === '/v1' || pathname.endsWith('/v1');
+        const basePath = hasV1 ? pathname : `${pathname === '/' ? '' : pathname}/v1`;
+        parsed.pathname = `${basePath}${normalizedPath}`;
+        return parsed.toString();
+    }
+
     async _getHeaders() {
-        const apiKey = await this.db.getSetting('llm.lmstudio.apiKey');
+        let apiKey = await this.db.getAPIKey?.('lmstudio') || null;
+        if (!apiKey) {
+            apiKey = await this.db.getSetting('llm.lmstudio.apiKey');
+            if (apiKey && this.db.setAPIKey) {
+                await this.db.setAPIKey('lmstudio', apiKey);
+            }
+        }
         const headers = {};
         if (apiKey) {
             headers['Authorization'] = `Bearer ${apiKey}`;

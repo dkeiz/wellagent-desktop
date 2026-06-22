@@ -1,10 +1,8 @@
 'use strict';
 
-const { DEFAULT_PIPER_VOICE_ID } = require('./config');
-
 function normalizeProvider(provider, voiceId) {
   const explicit = String(provider || '').trim().toLowerCase();
-  if (explicit === 'browser' || explicit === 'piper' || explicit === 'fast-qwen') {
+  if (explicit === 'browser' || explicit === 'fast-qwen' || explicit === 'piper') {
     return explicit;
   }
 
@@ -15,8 +13,8 @@ function normalizeProvider(provider, voiceId) {
 }
 
 function resolveVoiceChoice(params = {}, config = {}) {
-  const provider = normalizeProvider(params.provider, params.voice);
-  const rawVoice = String(params.voice || '').trim();
+  const rawVoice = String(params.voice || config.selectedVoice || '').trim();
+  const provider = normalizeProvider(params.provider || config.selectedProvider, rawVoice);
 
   if (provider === 'browser') {
     return {
@@ -29,13 +27,16 @@ function resolveVoiceChoice(params = {}, config = {}) {
   }
 
   if (provider === 'piper') {
-    const voiceId = rawVoice.startsWith('piper:') ? rawVoice.slice('piper:'.length) : (rawVoice || config.piperVoiceId || DEFAULT_PIPER_VOICE_ID);
+    const voiceName = rawVoice.startsWith('piper:')
+      ? rawVoice.slice('piper:'.length)
+      : (rawVoice || config.piperVoiceId || 'en_US-lessac-medium');
     return {
-      provider,
-      selectedVoiceId: `piper:${voiceId}`,
-      backendVoice: voiceId,
-      modelName: `piper:${voiceId}`,
-      usePlugin: true
+      provider: 'piper',
+      selectedVoiceId: `piper:${voiceName}`,
+      backendVoice: voiceName,
+      modelName: `piper:${voiceName}`,
+      usePlugin: true,
+      voiceKind: 'piper'
     };
   }
 
@@ -86,18 +87,6 @@ function buildVoiceCatalog(voiceResponse = {}, modelsResponse = {}) {
       provider: 'fast-qwen',
       kind: 'clone',
       description: voice.description || 'Prepared custom Qwen clone voice'
-    });
-  }
-  for (const item of modelItems) {
-    if (!String(item.id || '').startsWith('piper:')) continue;
-    const voiceId = String(item.id).slice('piper:'.length);
-    voices.push({
-      id: `piper:${voiceId}`,
-      name: voiceId,
-      provider: 'piper',
-      kind: 'builtin',
-      status: item.status || 'missing',
-      description: item.detail || 'Piper local voice'
     });
   }
   return voices;

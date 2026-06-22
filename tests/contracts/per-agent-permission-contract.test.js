@@ -7,7 +7,7 @@ class CapabilityStub {
       unsafe: false,
       web: true,
       files: 'read',
-      terminal: true,
+      terminal: 'workspace',
       ports: true,
       visual: false
     };
@@ -34,7 +34,13 @@ class CapabilityStub {
         allTools: ['read_file'],
         modes: { off: [], read: ['read_file'], full: ['read_file'] }
       },
-      { id: 'terminal', enabled: this.groupState.terminal, tools: ['run_command'], allTools: ['run_command'] },
+      {
+        id: 'terminal',
+        mode: this.groupState.terminal,
+        tools: ['run_command'],
+        allTools: ['run_command'],
+        modes: { off: [], workspace: ['run_command'], system: ['run_command'] }
+      },
       { id: 'ports', enabled: this.groupState.ports, tools: [], allTools: [] },
       { id: 'visual', enabled: this.groupState.visual, tools: [], allTools: [] }
     ];
@@ -55,7 +61,7 @@ class CapabilityStub {
       this.groupState.files = String(value || 'read');
       return;
     }
-    this.groupState[groupId] = Boolean(value);
+    this.groupState[groupId] = groupId === 'terminal' ? String(value || 'workspace') : Boolean(value);
   }
 }
 
@@ -71,17 +77,31 @@ class FakeDB {
   run(sql, args = []) {
     const text = String(sql);
     if (text.includes('CREATE TABLE IF NOT EXISTS agent_permission_profiles')) return;
+    if (text.includes('ALTER TABLE agent_permission_profiles')) return;
     if (text.includes('CREATE TABLE IF NOT EXISTS agent_tool_states')) return;
 
     if (text.includes('INSERT OR REPLACE INTO agent_permission_profiles')) {
-      const [agentId, mainEnabled, filesMode, unsafeEnabled, webEnabled, terminalEnabled, portsEnabled, visualEnabled] = args;
+      const [
+        agentId,
+        mainEnabled,
+        presetId,
+        filesMode,
+        unsafeEnabled,
+        webEnabled,
+        terminalEnabled,
+        terminalMode,
+        portsEnabled,
+        visualEnabled
+      ] = args;
       this.agentProfiles.set(Number(agentId), {
         agent_id: Number(agentId),
         main_enabled: mainEnabled ? 1 : 0,
+        preset_id: String(presetId || ''),
         files_mode: String(filesMode),
         unsafe_enabled: unsafeEnabled ? 1 : 0,
         web_enabled: webEnabled ? 1 : 0,
         terminal_enabled: terminalEnabled ? 1 : 0,
+        terminal_mode: String(terminalMode || (terminalEnabled ? 'workspace' : 'off')),
         ports_enabled: portsEnabled ? 1 : 0,
         visual_enabled: visualEnabled ? 1 : 0
       });
@@ -221,12 +241,41 @@ module.exports = {
     const resolvedB = await service.resolveContext({ agentId: 102 });
     assert.equal(resolvedA.toolStates.plugin_scoped_tool, true, 'Expected scoped plugin tool auto-enabled for matching agent');
     assert.equal(resolvedB.toolStates.plugin_scoped_tool, false, 'Expected scoped plugin tool disabled for non-matching agent');
+    assert.equal(global.toolStates.plugin_scoped_tool, false, 'Expected scoped plugin tool hidden in global context');
 
     await service.setAgentTool(101, 'run_command', true);
     const resolvedAAfterOverride = await service.resolveContext({ agentId: 101 });
     const resolvedBAfterOverride = await service.resolveContext({ agentId: 102 });
     assert.equal(resolvedAAfterOverride.toolStates.run_command, true, 'Expected agent A override to enable run_command');
     assert.equal(resolvedBAfterOverride.toolStates.run_command, false, 'Expected agent B to remain independent');
+
+    const developerApplied = await service.applyAgentPreset(102, 'developer');
+    assert.equal(developerApplied.activePresetId, 'developer', 'Expected developer preset to be marked active');
+    assert.equal(developerApplied.profile.preset_id, 'developer', 'Expected profile row to store preset id');
+    assert.equal(developerApplied.profile.files_mode, 'full', 'Expected developer preset to grant full file access');
+    assert.equal(developerApplied.toolStates.run_command, true, 'Expected developer preset to allow terminal tool');
+    assert.equal(developerApplied.toolStates.create_tool, true, 'Expected developer preset to allow unsafe tool');
+    assert.equal(developerApplied.toolStates.read_file, true, 'Expected developer preset to allow file tool');
+
+    await service.setAgentTool(102, 'run_command', false);
+    const developerEdited = await service.getAgentProfile(102);
+    assert.equal(developerEdited.activePresetId, '', 'Expected manual tool edit to exit developer preset mode');
+    assert.equal(developerEdited.toolStates.run_command, false, 'Expected explicit override to remain after leaving preset mode');
+
+    const developerReset = await service.resetAgentProfile(102);
+    assert.equal(developerReset.activePresetId, '', 'Expected reset to clear preset state');
+    assert.equal(developerReset.toolStates.run_command, false, 'Expected reset to restore global terminal state');
+    assert.equal(developerReset.toolStates.create_tool, false, 'Expected reset to restore global unsafe state');
+
+    db.addAgent({ id: 103, name: 'File Manager C', type: 'pro' });
+    await db.setSetting('tool.plugin_scoped_tool.active', 'true');
+    await service.resetAgentProfile(101);
+    const globalWithScopedEnabled = await service.resolveContext({});
+    const resolvedAMatchingScope = await service.resolveContext({ agentId: 101 });
+    const resolvedCNonMatchingScope = await service.resolveContext({ agentId: 103 });
+    assert.equal(globalWithScopedEnabled.toolStates.plugin_scoped_tool, false, 'Expected scoped tool to remain hidden when globally enabled');
+    assert.equal(resolvedAMatchingScope.toolStates.plugin_scoped_tool, true, 'Expected matching agent to retain scoped tool visibility when globally enabled');
+    assert.equal(resolvedCNonMatchingScope.toolStates.plugin_scoped_tool, false, 'Expected non-matching agent to keep scoped tool hidden when globally enabled');
 
     capabilityManager.setGroupEnabled('unsafe', true);
     await db.setSetting('tool.create_tool.active', 'true');

@@ -1,18 +1,16 @@
 const fs = require('fs');
 const path = require('path');
 const { getDefaultAgents } = require('./agent-defaults');
-const { enableCompanionPlugin, disableCompanionPlugin } = require('./agent-companion-plugins');
+const { buildRuntimePaths } = require('./runtime-paths');
+
 const { invokeMultipleSubAgents } = require('./agent-batch-invoker');
 const SubtaskRuntime = require('./subtask-runtime');
-const {
-    assessCompletionQuality,
-    buildCompletionCandidate,
-    buildForcedIncompleteContract,
-    buildSubagentIdentifiers,
-    buildSubagentReminderPrompt,
-    normalizeCompletionPayload,
-    summarizePlainText
-} = require('./subagent-contract');
+const AgentSubagentContractMethods = require('./agent-subagent-contract-methods');
+const AgentSubagentRunMethods = require('./agent-subagent-run-methods');
+
+const DEFAULT_AGENT_ADDITION_SYNC_KEY = 'agents.defaultAdditionsSynced.v4.book-comfy-setup-search';
+const DEFAULT_AGENT_PLUGIN_SYNC_KEY = 'agents.defaultPluginsSynced.v3.book-comfy-setup';
+const DEFAULT_AGENT_ADDITION_NAMES = ['Book Writer', 'ComfyUI Studio', 'Setup Superagent', 'Search Agent'];
 
 class AgentManager {
     constructor(db, dispatcher, agentLoop, agentMemory, sessionWorkspace = null, chainController = null, eventBus = null, subtaskRuntime = null, options = {}) {
@@ -30,7 +28,7 @@ class AgentManager {
         this.cancelledSubtaskRuns = new Set();
         this.pluginManager = options.pluginManager || null;
         this.toolPermissionService = options.toolPermissionService || null;
-        this.basePath = options.basePath || path.join(__dirname, '../../agentin/agents');
+        this.basePath = options.basePath || buildRuntimePaths(options).agentBasePath;
         this.maxDelegatedCompletionRetries = Math.max(0, Number(options.maxDelegatedCompletionRetries) || 2);
     }
 
@@ -54,7 +52,10 @@ class AgentManager {
             }
         }
 
+        await this._migrateBackgroundDaemonOutOfPro();
+        await this._migrateDefaultAgentNames();
         await this._seedDefaultAgents(await this.db.getAgents());
+        await this._syncDefaultAgentAdditions();
 
         for (const agent of await this.db.getAgents()) {
             this._ensureAgentFolder(agent);
@@ -66,13 +67,20 @@ class AgentManager {
     }
 
     async _seedDefaultAgents(existingAgents = null) {
+        const seedSettingKey = 'agents.defaultsSeeded.v1';
+        const seedState = await this.db.getSetting(seedSettingKey);
+        if (String(seedState || '').toLowerCase() === 'true') {
+            return;
+        }
+
         const defaults = getDefaultAgents();
-        const existingNames = new Set((existingAgents || await this.db.getAgents())
-            .map(agent => String(agent.name || '').toLowerCase()));
+        const currentAgents = existingAgents || await this.db.getAgents();
+        const existingNames = new Set(currentAgents
+            .map(agent => String(agent.name || '').trim().toLowerCase()));
         let created = 0;
 
         for (const agentDef of defaults) {
-            if (existingNames.has(String(agentDef.name).toLowerCase())) {
+            if (existingNames.has(String(agentDef.name).trim().toLowerCase())) {
                 continue;
             }
             try {
@@ -83,9 +91,135 @@ class AgentManager {
             }
         }
 
+        await this.db.saveSetting(seedSettingKey, 'true');
         if (created > 0) {
             console.log(`[AgentManager] Seeded ${created} default agent(s)`);
         }
+    }
+
+    _parseAgentConfig(raw) {
+        if (!raw) return {};
+        if (typeof raw === 'object' && !Array.isArray(raw)) return raw;
+        if (typeof raw !== 'string') return {};
+        try {
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    _defaultAgentAdditions() {
+        const wanted = new Set(DEFAULT_AGENT_ADDITION_NAMES.map(name => name.toLowerCase()));
+        return getDefaultAgents().filter(agent => wanted.has(String(agent.name || '').toLowerCase()));
+    }
+
+    _buildDefaultAgentRepair(existing, agentDef) {
+        const patch = {};
+        if (String(existing.type || '').toLowerCase() !== String(agentDef.type || 'pro').toLowerCase()) {
+            patch.type = agentDef.type || 'pro';
+        }
+        if (!existing.icon && agentDef.icon) patch.icon = agentDef.icon;
+        if (!existing.description && agentDef.description) patch.description = agentDef.description;
+        if (!existing.system_prompt && agentDef.system_prompt) patch.system_prompt = agentDef.system_prompt;
+
+        const existingConfig = this._parseAgentConfig(existing.config);
+        const requiredPlugin = agentDef.config?.chat_ui_plugin;
+        if (requiredPlugin && existingConfig.chat_ui_plugin !== requiredPlugin) {
+            patch.config = { ...existingConfig, chat_ui_plugin: requiredPlugin };
+        }
+
+        const folderName = this._getSafeFolderName(agentDef.name);
+        const folderPath = `${agentDef.type || 'pro'}/${folderName}`;
+        if (!existing.folder_path) patch.folder_path = folderPath;
+
+        return patch;
+    }
+
+    async _syncDefaultAgentAdditions() {
+        const syncState = await this.db.getSetting(DEFAULT_AGENT_ADDITION_SYNC_KEY);
+        if (String(syncState || '').toLowerCase() === 'true') return;
+
+        const additions = this._defaultAgentAdditions();
+        const agents = await this.db.getAgents();
+        const existingByName = new Map(
+            agents.map(agent => [String(agent.name || '').trim().toLowerCase(), agent])
+        );
+
+        let created = 0;
+        let repaired = 0;
+        let errors = 0;
+        for (const agentDef of additions) {
+            const key = String(agentDef.name || '').trim().toLowerCase();
+            const existing = existingByName.get(key);
+            if (!existing) {
+                try {
+                    await this.createAgent(agentDef);
+                    created++;
+                } catch (e) {
+                    errors++;
+                    console.error(`[AgentManager] Failed to add default agent "${agentDef.name}":`, e.message);
+                }
+                continue;
+            }
+
+            const patch = this._buildDefaultAgentRepair(existing, agentDef);
+            if (Object.keys(patch).length > 0) {
+                try {
+                    this._ensureAgentFolder({ ...existing, ...patch, name: agentDef.name });
+                    await this.updateAgent(existing.id, patch);
+                    repaired++;
+                } catch (e) {
+                    errors++;
+                    console.error(`[AgentManager] Failed to repair default agent "${agentDef.name}":`, e.message);
+                }
+            }
+        }
+
+        if (errors === 0) {
+            await this.db.saveSetting(DEFAULT_AGENT_ADDITION_SYNC_KEY, 'true');
+        }
+        if (created > 0 || repaired > 0) {
+            console.log(`[AgentManager] Synced default agent additions: ${created} created, ${repaired} repaired`);
+        }
+    }
+
+    async syncDefaultAgentPlugins(pluginManager = this.pluginManager) {
+        if (!pluginManager?.enablePlugin) {
+            return { success: false, error: 'PluginManager unavailable', enabled: [] };
+        }
+        const syncState = await this.db.getSetting(DEFAULT_AGENT_PLUGIN_SYNC_KEY);
+        if (String(syncState || '').toLowerCase() === 'true') {
+            return { success: true, skipped: true, enabled: [] };
+        }
+
+        const pluginIds = new Set();
+        for (const agentDef of this._defaultAgentAdditions()) {
+            const pluginId = String(agentDef.config?.chat_ui_plugin || '').trim();
+            if (pluginId) pluginIds.add(pluginId);
+        }
+
+        const enabled = [];
+        const missing = [];
+        const errors = [];
+        for (const pluginId of pluginIds) {
+            if (pluginManager.plugins && !pluginManager.plugins.has(pluginId)) {
+                missing.push(pluginId);
+                continue;
+            }
+            try {
+                await pluginManager.enablePlugin(pluginId, { persistStatus: true });
+                enabled.push(pluginId);
+            } catch (e) {
+                errors.push({ pluginId, error: e.message });
+                console.error(`[AgentManager] Failed to enable default agent plugin "${pluginId}":`, e.message);
+            }
+        }
+
+        if (errors.length === 0 && missing.length === 0) {
+            await this.db.saveSetting(DEFAULT_AGENT_PLUGIN_SYNC_KEY, 'true');
+        }
+        return { success: errors.length === 0, enabled, missing, errors };
     }
 
     _ensureAgentFolder(agent) {
@@ -111,12 +245,49 @@ class AgentManager {
     }
 
     _getAgentFolderPath(agent) {
-        const safeName = agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
-        return path.join(this.basePath, agent.type, safeName);
+        const safeName = this._getSafeFolderName(agent.name || `agent-${agent.id || 'unknown'}`);
+        const relativePath = String(agent.folder_path || path.join(agent.type || 'pro', safeName)).replace(/\\/g, '/');
+        const base = path.resolve(this.basePath);
+        const resolved = path.resolve(base, relativePath);
+        if (resolved !== base && !resolved.startsWith(base + path.sep)) {
+            throw new Error('Agent folder path is outside the agent root');
+        }
+        return resolved;
     }
 
     _getSafeFolderName(name) {
         return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
+    }
+
+    async _migrateBackgroundDaemonOutOfPro() {
+        const agents = await this.db.getAgents();
+        for (const agent of agents) {
+            const name = String(agent?.name || '').trim().toLowerCase();
+            if (name !== 'background daemon') continue;
+            if (String(agent?.type || '').toLowerCase() !== 'pro') continue;
+            const folderName = this._getSafeFolderName(agent.name || 'background-daemon');
+            await this.db.updateAgent(agent.id, {
+                type: 'daemon',
+                folder_path: `daemon/${folderName}`
+            });
+        }
+    }
+
+    async _migrateDefaultAgentNames() {
+        const agents = await this.db.getAgents();
+        const byName = new Map(
+            agents.map((agent) => [String(agent?.name || '').trim().toLowerCase(), agent])
+        );
+        const oldName = 'web researcher';
+        const newName = 'web search';
+        if (!byName.has(oldName) || byName.has(newName)) {
+            return;
+        }
+
+        const source = byName.get(oldName);
+        await this.db.updateAgent(source.id, {
+            name: 'Web Search'
+        });
     }
 
     async createAgent({ name, type = 'pro', icon = '🤖', system_prompt, description, config }) {
@@ -147,10 +318,22 @@ class AgentManager {
         return result;
     }
 
+    async setAgentSidebarVisible(id, visible) {
+        const visibleInSidebar = visible === true;
+        await this.db.updateAgent(id, { visible_in_sidebar: visibleInSidebar ? 1 : 0 });
+        return { id, visibleInSidebar };
+    }
+
     async deleteAgent(id) {
         const agent = await this.db.getAgent(id);
-        if (agent) {}
-        return await this.db.deleteAgent(id);
+        const folderPath = agent ? this._getAgentFolderPath(agent) : null;
+        const result = await this.db.deleteAgent(id);
+        let folderRemoved = false;
+        if (folderPath && fs.existsSync(folderPath)) {
+            fs.rmSync(folderPath, { recursive: true, force: true });
+            folderRemoved = true;
+        }
+        return { ...result, folderRemoved };
     }
 
     async getAgents(type = null) {
@@ -159,6 +342,30 @@ class AgentManager {
 
     async getAgent(id) {
         return await this.db.getAgent(id);
+    }
+
+    _agentAsSubagentRun(agent) {
+        if (!agent || agent.type !== 'sub') {
+            return null;
+        }
+        // Represent sub-agent records in the run manager so the user can manage
+        // backend sub-agents even when they have no delegated run history yet.
+        return {
+            id: agent.id,
+            run_id: String(agent.id),
+            status: agent.status || 'idle',
+            subagent_id: agent.id,
+            agent_name: agent.name || `Subagent ${agent.id}`,
+            parent_session_id: null,
+            child_session_id: null,
+            task: agent.description || '',
+            summary: '',
+            error: null,
+            created_at: agent.created_at || null,
+            completed_at: null,
+            subagent_mode: 'no_ui',
+            source: 'agent'
+        };
     }
 
     async activateAgent(agentId) {
@@ -172,7 +379,7 @@ class AgentManager {
             session = await this.db.createAgentSession(agentId);
         }
 
-        await this._enableCompanionPlugin(agent);
+
 
         return { agent, sessionId: session.id };
     }
@@ -189,7 +396,7 @@ class AgentManager {
             }
         }
 
-        await this._disableCompanionPlugin(agent);
+
 
         await this.db.updateAgent(agentId, { status: 'idle' });
     }
@@ -264,725 +471,6 @@ class AgentManager {
         return null;
     }
 
-    _buildSubAgentTask(task, contractType, expectedOutput = '', run = null) {
-        const outputHint = expectedOutput && String(expectedOutput).trim() ? String(expectedOutput).trim() : 'Return the most useful structured fields for the task in the data object.';
-        const runGuidance = run
-            ? `Run files for this delegated task:
-- Run Folder: ${run.run_dir}
-- Status File: ${run.status_path}
-- Result File: ${run.result_path}
-- Trace File: ${run.trace_path}
-- Workspace Directory: ${run.workspace_dir}
-
-Your parent may inspect this run folder later if clarification is needed. Keep your work legible, and use workspace files for large intermediate output when useful.
-`
-            : '';
-
-        return `You are being invoked as a sub-agent by another agent.
-
-Complete only the requested task. Use available tools if needed.
-When the completion tool "complete_subtask" is available, call it to finish the run.
-If tool call is unavailable, return a strict JSON object (no wrappers, no markdown) matching the completion envelope below.
-Silent stop is invalid. If the result is empty, blocked, or unavailable, deliver that noticed outcome instead of stopping.
-
-Required completion envelope:
-- status: short outcome label. "${contractType}" is preferred for a strong result, but labels like "partial", "empty", "blocked", or "task_failed" are valid too
-- summary: short human-readable outcome
-- data: structured object with the actual result or outcome details
-- artifacts: array of files created or relied on for the result
-- notes: optional string
-
-The parent is authoritative. It may accept your envelope, recall you, or send a new task based on what you deliver.
-
-Expected output details:
-${outputHint}
-
-${runGuidance}
-
-Task:
-${task}`;
-    }
-
-    _extractJsonObject(text) {
-        const content = String(text || '').trim();
-        if (!content) return null;
-
-        const fencedMatch = content.match(/```json\s*([\s\S]*?)```/i) || content.match(/```\s*([\s\S]*?)```/i);
-        const candidate = fencedMatch ? fencedMatch[1].trim() : content;
-
-        try {
-            return JSON.parse(candidate);
-        } catch (error) {
-        }
-
-        const start = candidate.indexOf('{');
-        if (start === -1) {
-            return null;
-        }
-
-        let depth = 0;
-        let inString = false;
-        let escapeNext = false;
-
-        for (let index = start; index < candidate.length; index++) {
-            const char = candidate[index];
-
-            if (escapeNext) {
-                escapeNext = false;
-                continue;
-            }
-
-            if (char === '\\') {
-                escapeNext = true;
-                continue;
-            }
-
-            if (char === '"') {
-                inString = !inString;
-                continue;
-            }
-
-            if (inString) {
-                continue;
-            }
-
-            if (char === '{') {
-                depth++;
-            } else if (char === '}') {
-                depth--;
-                if (depth === 0) {
-                    try {
-                        return JSON.parse(candidate.slice(start, index + 1));
-                    } catch (error) {
-                        return null;
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
-
-    _summarizePlainText(text) {
-        return summarizePlainText(text);
-    }
-
-    _normalizeWorkspaceArtifacts(sessionId) {
-        if (!this.sessionWorkspace) {
-            return [];
-        }
-
-        return this.sessionWorkspace.listFiles(sessionId).map(file => ({
-            path: file.path,
-            name: file.name,
-            size: file.size,
-            created: file.created instanceof Date ? file.created.toISOString() : file.created,
-            description: 'Generated in sub-agent workspace',
-            source: 'workspace'
-        }));
-    }
-
-    _mergeArtifacts(contractArtifacts, workspaceArtifacts) {
-        const merged = new Map();
-
-        const pushArtifact = (artifact, fallbackSource) => {
-            if (!artifact || typeof artifact !== 'object') {
-                return;
-            }
-
-            const pathValue = artifact.path ? String(artifact.path) : '';
-            const nameValue = artifact.name ? String(artifact.name) : '';
-            const key = nameValue || pathValue;
-            if (!key) {
-                return;
-            }
-
-            const existing = merged.get(key) || {};
-            merged.set(key, {
-                ...existing,
-                ...artifact,
-                path: pathValue || existing.path || '',
-                name: nameValue || existing.name || '',
-                source: artifact.source || existing.source || fallbackSource
-            });
-        };
-
-        contractArtifacts.forEach(artifact => pushArtifact(artifact, 'contract'));
-        workspaceArtifacts.forEach(artifact => pushArtifact(artifact, 'workspace'));
-
-        return Array.from(merged.values());
-    }
-
-    async _persistSubagentConversation(sessionId, role, content, metadata = null) {
-        if (!this.db || typeof this.db.addConversation !== 'function' || !sessionId || !content) {
-            return;
-        }
-
-        try {
-            await this.db.addConversation({ role, content, metadata }, sessionId);
-        } catch (error) {
-            console.error('[AgentManager] Failed to persist subagent conversation:', error.message);
-        }
-    }
-
-    _resolveSubagentCompletion(response, sessionId, contractType) {
-        const candidate = buildCompletionCandidate(
-            response,
-            contractType,
-            (text) => this._extractJsonObject(text)
-        );
-        if (!candidate.payload) {
-            return {
-                ok: false,
-                retryable: true,
-                reason: 'missing_completion_contract',
-                message: candidate.source === 'missing'
-                    ? 'Sub-agent completion payload missing; expected complete_subtask call or strict JSON result.'
-                    : 'Sub-agent returned plain text instead of the required completion envelope.',
-                candidate
-            };
-        }
-
-        const payload = {
-            ...candidate.payload,
-            status: candidate.payload.status || candidate.inferredStatus,
-            summary: candidate.payload.summary
-                || summarizePlainText(candidate.rawContent || JSON.stringify(candidate.payload.data || {})),
-            data: candidate.payload.data && typeof candidate.payload.data === 'object' && !Array.isArray(candidate.payload.data)
-                ? candidate.payload.data
-                : {},
-            artifacts: Array.isArray(candidate.payload.artifacts) ? candidate.payload.artifacts : [],
-            notes: candidate.payload.notes === undefined || candidate.payload.notes === null
-                ? ''
-                : candidate.payload.notes
-        };
-
-        let normalized;
-        try {
-            normalized = normalizeCompletionPayload(payload, { preferredStatus: contractType });
-        } catch (error) {
-            return {
-                ok: false,
-                retryable: true,
-                reason: 'invalid_completion_contract',
-                message: error.message,
-                candidate
-            };
-        }
-
-        const workspaceArtifacts = this._normalizeWorkspaceArtifacts(sessionId);
-        const contract = {
-            ...normalized,
-            artifacts: this._mergeArtifacts(normalized.artifacts, workspaceArtifacts)
-        };
-        const quality = assessCompletionQuality(contract, candidate);
-        if (!quality.ok) {
-            return {
-                ok: false,
-                retryable: true,
-                reason: quality.reason,
-                message: quality.message,
-                candidate,
-                contract
-            };
-        }
-
-        return {
-            ok: true,
-            retryable: false,
-            candidate,
-            contract
-        };
-    }
-
-    async _loadSubagentConversationHistory(sessionId) {
-        if (!this.db || typeof this.db.getConversations !== 'function') {
-            return [];
-        }
-
-        const messages = await this.db.getConversations(100, sessionId);
-        return (Array.isArray(messages) ? messages : [])
-            .map(message => ({
-                role: message.role,
-                content: String(message.content || '')
-            }))
-            .filter(message => message.content.trim().length > 0);
-    }
-
-    async _persistDelegatedPrompt(runId, sessionId, content, metadata = {}) {
-        this.subtaskRuntime.appendMessage(runId, {
-            role: 'user',
-            content,
-            metadata
-        });
-        await this._persistSubagentConversation(sessionId, 'user', content, metadata);
-    }
-
-    async _setSubagentActive(agentId, active) {
-        const current = this.activeSubtaskCounts.get(agentId) || 0;
-        const next = active ? current + 1 : Math.max(0, current - 1);
-        this.activeSubtaskCounts.set(agentId, next);
-        await this.db.updateAgent(agentId, { status: next > 0 ? 'active' : 'idle' });
-    }
-
-    _createTraceHooks(runId) {
-        if (!this.subtaskRuntime) {
-            return null;
-        }
-
-        const run = this.subtaskRuntime.getRun(runId);
-        const sessionId = run?.child_session_id || null;
-
-        return {
-            onAssistantMessage: async ({ content }) => {
-                const visibleContent = this.chainController?.stripToolPatterns
-                    ? this.chainController.stripToolPatterns(content)
-                    : String(content || '').trim();
-                if (!visibleContent) {
-                    return;
-                }
-                this.subtaskRuntime.appendMessage(runId, {
-                    role: 'assistant',
-                    content: visibleContent
-                });
-                await this._persistSubagentConversation(sessionId, 'assistant', visibleContent);
-            },
-            onSyntheticUserMessage: async ({ content, kind }) => {
-                this.subtaskRuntime.appendMessage(runId, {
-                    role: 'user',
-                    content,
-                    metadata: {
-                        auto_generated: true,
-                        kind: kind || 'synthetic_user'
-                    }
-                });
-                await this._persistSubagentConversation(sessionId, 'user', content, {
-                    auto_generated: true,
-                    kind: kind || 'synthetic_user'
-                });
-            },
-            onToolResult: async ({ toolName, params, success, result, error }) => {
-                this.subtaskRuntime.appendToolEvent(runId, {
-                    tool_name: toolName,
-                    params,
-                    success,
-                    result,
-                    error
-                });
-                const label = success
-                    ? `Tool ${toolName} succeeded:\n${JSON.stringify(result, null, 2)}`
-                    : `Tool ${toolName} failed: ${error || 'Unknown error'}`;
-                await this._persistSubagentConversation(sessionId, 'system', label, {
-                    tool_name: toolName,
-                    params,
-                    success
-                });
-            }
-        };
-    }
-
-    async getSubagentRun(runId) {
-        if (this.subtaskRuntime) {
-            return this.subtaskRuntime.getRun(runId);
-        }
-        return this.db.getSubagentRun(runId);
-    }
-
-    async listSubagentRuns(filters = {}) {
-        if (this.subtaskRuntime) {
-            return this.subtaskRuntime.listRuns(filters);
-        }
-        return this.db.listSubagentRuns(filters);
-    }
-
-    async clearSubagentRuns(filters = {}) {
-        if (this.subtaskRuntime && typeof this.subtaskRuntime.clearRuns === 'function') {
-            return this.subtaskRuntime.clearRuns(filters);
-        }
-        return { success: false, removed: 0, kept: 0, failed: 0, error: 'Subagent run cleanup is unavailable' };
-    }
-
-    async waitForSubagentRun(runId, timeoutMs = 30000) {
-        const timeout = Math.max(100, Number(timeoutMs) || 30000);
-        const started = Date.now();
-
-        while (Date.now() - started < timeout) {
-            const pending = this.pendingSubtasks.get(runId);
-            if (pending) {
-                await Promise.race([
-                    pending.catch(() => null),
-                    new Promise(resolve => setTimeout(resolve, 25))
-                ]);
-            }
-
-            const run = await this.getSubagentRun(runId);
-            if (run && ['failed', 'task_failed'].includes(String(run.status))) {
-                if (pending) {
-                    await pending.catch(() => null);
-                }
-                return run;
-            }
-            if (run && run.result) {
-                if (pending) {
-                    await pending.catch(() => null);
-                    return this.getSubagentRun(runId);
-                }
-                return run;
-            }
-
-            await new Promise(resolve => setTimeout(resolve, 25));
-        }
-
-        throw new Error(`Timed out waiting for subagent run ${runId}`);
-    }
-
-    _isSubagentRunCancelled(runId) {
-        return this.cancelledSubtaskRuns.has(String(runId));
-    }
-
-    _consumeCancelledSubagentRun(runId) {
-        this.cancelledSubtaskRuns.delete(String(runId));
-    }
-
-    _assertSubagentRunNotCancelled(runId) {
-        if (this._isSubagentRunCancelled(runId)) {
-            throw new Error('Cancelled by user');
-        }
-    }
-
-    _isCancellationError(error) {
-        return String(error?.message || '').toLowerCase().includes('cancelled by user');
-    }
-
-    async _executeDelegatedRun(run, agent, task, contractType, expectedOutput) {
-        this._assertSubagentRunNotCancelled(run.run_id);
-        const traceHooks = this._createTraceHooks(run.run_id);
-        const taskPrompt = this._buildSubAgentTask(task, contractType, expectedOutput, run);
-        await this._persistDelegatedPrompt(run.run_id, run.child_session_id, taskPrompt, {
-            delegated: true,
-            parent_session_id: run.parent_session_id,
-            run_id: run.run_id,
-            subagent_id: run.subagent_id
-        });
-
-        this.subtaskRuntime.markRunning(run.run_id);
-        const identifiers = buildSubagentIdentifiers(run);
-        this.eventBus?.publish('subagent:started', {
-            runId: run.run_id,
-            parentSessionId: run.parent_session_id,
-            childSessionId: run.child_session_id,
-            subagentId: run.subagent_id,
-            agentName: run.agent_name,
-            subagentMode: run.subagent_mode || 'no_ui',
-            identifiers
-        });
-
-        try {
-            let prompt = taskPrompt;
-            let history = [];
-            let result = null;
-            let validation = null;
-            let remindersSent = 0;
-
-            while (true) {
-                this._assertSubagentRunNotCancelled(run.run_id);
-                const dispatchProvider = String(run.provider || '').trim().toLowerCase() || null;
-                const concurrencyMode = String(run.concurrency_mode || 'queued').trim().toLowerCase() === 'parallel'
-                    ? 'parallel'
-                    : 'queued';
-                result = this.chainController
-                    ? await this.chainController.executeWithChaining(
-                        prompt,
-                        history,
-                        {
-                            mode: 'chat',
-                            sessionId: run.child_session_id,
-                            agentId: agent.id,
-                            subagentRunId: run.run_id,
-                            includeTools: true,
-                            includeRules: false,
-                            skipMemoryOnStart: true,
-                            provider: dispatchProvider || undefined,
-                            concurrencyMode,
-                            completionTools: ['complete_subtask'],
-                            maxChainSteps: 24,
-                            trace: traceHooks
-                        }
-                    )
-                    : await this.dispatcher.dispatch(
-                        prompt,
-                        history,
-                        {
-                            mode: 'chat',
-                            sessionId: run.child_session_id,
-                            agentId: agent.id,
-                            includeTools: true,
-                            includeRules: false,
-                            skipMemoryOnStart: true,
-                            provider: dispatchProvider || undefined,
-                            concurrencyMode
-                        }
-                    );
-                this._assertSubagentRunNotCancelled(run.run_id);
-
-                if (!this.chainController && result?.content) {
-                    this.subtaskRuntime.appendMessage(run.run_id, {
-                        role: 'assistant',
-                        content: result.content
-                    });
-                }
-
-                validation = this._resolveSubagentCompletion(result, run.child_session_id, contractType);
-                if (validation.ok) {
-                    break;
-                }
-
-                if (remindersSent >= this.maxDelegatedCompletionRetries) {
-                    validation = {
-                        ok: true,
-                        contract: buildForcedIncompleteContract(
-                            contractType,
-                            validation,
-                            remindersSent,
-                            result
-                        )
-                    };
-                    break;
-                }
-
-                remindersSent += 1;
-                history = await this._loadSubagentConversationHistory(run.child_session_id);
-                prompt = buildSubagentReminderPrompt(contractType, validation, remindersSent);
-                await this._persistDelegatedPrompt(run.run_id, run.child_session_id, prompt, {
-                    delegated: true,
-                    auto_generated: true,
-                    kind: 'backend_completion_reminder',
-                    reminder_attempt: remindersSent,
-                    run_id: run.run_id,
-                    subagent_id: run.subagent_id
-                });
-            }
-
-            const contract = validation.contract;
-            const completedRun = this.subtaskRuntime.completeRun(run.run_id, {
-                contract,
-                artifacts: contract.artifacts,
-                raw_response: result?.content || ''
-            });
-            const delivery = await this.subtaskRuntime.deliverToParent(run.run_id, {
-                status: contract.status,
-                summary: contract.summary,
-                contract
-            });
-
-            this.eventBus?.publish('subagent:completed', {
-                runId: run.run_id,
-                parentSessionId: run.parent_session_id,
-                childSessionId: run.child_session_id,
-                subagentId: run.subagent_id,
-                agentName: run.agent_name,
-                subagentMode: run.subagent_mode || 'no_ui',
-                summary: contract.summary,
-                status: contract.status,
-                deliveryPath: delivery?.delivery_path || null,
-                identifiers
-            });
-
-            return completedRun;
-        } catch (error) {
-            if (this._isCancellationError(error) && this.subtaskRuntime?.cancelRun) {
-                const stoppedRun = this.subtaskRuntime.cancelRun(run.run_id, 'Stopped by user');
-                this.eventBus?.publish('subagent:failed', {
-                    runId: run.run_id,
-                    parentSessionId: run.parent_session_id,
-                    childSessionId: run.child_session_id,
-                    subagentId: run.subagent_id,
-                    agentName: run.agent_name,
-                    subagentMode: run.subagent_mode || 'no_ui',
-                    error: 'Stopped by user',
-                    status: 'stopped',
-                    cancelled: true,
-                    identifiers
-                });
-                return stoppedRun;
-            }
-
-            const failedRun = this.subtaskRuntime.failRun(run.run_id, error.message);
-            await this.subtaskRuntime.deliverToParent(run.run_id, {
-                status: 'failed',
-                summary: error.message,
-                contract: {
-                    status: 'delivery_error',
-                    summary: error.message,
-                    data: {},
-                    artifacts: [],
-                    notes: ''
-                }
-            });
-            this.eventBus?.publish('subagent:failed', {
-                runId: run.run_id,
-                parentSessionId: run.parent_session_id,
-                childSessionId: run.child_session_id,
-                subagentId: run.subagent_id,
-                agentName: run.agent_name,
-                subagentMode: run.subagent_mode || 'no_ui',
-                error: error.message,
-                identifiers
-            });
-            return failedRun;
-        } finally {
-            if (this.toolPermissionService) {
-                this.toolPermissionService.clearRunScopedGrant(run.run_id);
-            }
-            this._consumeCancelledSubagentRun(run.run_id);
-            await this._setSubagentActive(agent.id, false);
-        }
-    }
-
-    async cancelSubagentRun(runId, reason = 'Cancelled by user') {
-        const normalizedRunId = String(runId || '').trim();
-        if (!normalizedRunId) {
-            return { success: false, error: 'runId is required' };
-        }
-
-        const run = await this.getSubagentRun(normalizedRunId);
-        if (!run) {
-            return { success: false, error: `Subagent run "${normalizedRunId}" not found` };
-        }
-
-        const status = String(run.status || '');
-        if (['failed', 'completed', 'task_complete', 'task_failed', 'cancelled', 'stopped'].includes(status)) {
-            return { success: true, run };
-        }
-
-        this.cancelledSubtaskRuns.add(normalizedRunId);
-        if (this.subtaskRuntime && typeof this.subtaskRuntime.cancelRun === 'function') {
-            this.subtaskRuntime.cancelRun(normalizedRunId, String(reason || 'Stopped by user'));
-        }
-
-        this.eventBus?.publish('subagent:failed', {
-            runId: run.run_id,
-            parentSessionId: run.parent_session_id,
-            childSessionId: run.child_session_id,
-            subagentId: run.subagent_id,
-            agentName: run.agent_name,
-            subagentMode: run.subagent_mode || 'no_ui',
-            error: String(reason || 'Stopped by user'),
-            status: 'stopped',
-            cancelled: true,
-            identifiers: buildSubagentIdentifiers(run)
-        });
-
-        return { success: true, run: await this.getSubagentRun(normalizedRunId) };
-    }
-
-    _startDelegatedRun(run, agent, task, contractType, expectedOutput, queueProvider = null) {
-        const execute = () => this._executeDelegatedRun(run, agent, task, contractType, expectedOutput)
-            .catch(error => {
-                console.error('[AgentManager] Delegated subtask failed:', error.message);
-                return null;
-            });
-        let pending = execute();
-
-        pending = pending.finally(() => {
-            this.pendingSubtasks.delete(run.run_id);
-        });
-        this.pendingSubtasks.set(run.run_id, pending);
-        return pending;
-    }
-
-    async invokeSubAgent(parentSessionId, subAgentId, task, options = {}) {
-        const agent = await this.db.getAgent(subAgentId);
-        if (!agent || agent.type !== 'sub') {
-            throw new Error(`Sub-agent ${subAgentId} not found or not a sub-agent`);
-        }
-
-        const contractType = options.contractType || 'task_complete';
-        const expectedOutput = options.expectedOutput || '';
-        const subagentModeRaw = String(options.subagentMode || 'no_ui').trim().toLowerCase();
-        const subagentMode = subagentModeRaw === 'ui' ? 'ui' : 'no_ui';
-        const provider = String(options.provider || '').trim().toLowerCase();
-        const queueProvider = String(options.queueProvider || '').trim();
-        const concurrencyMode = String(options.concurrencyMode || options.concurrency_mode || 'queued').trim().toLowerCase() === 'parallel'
-            ? 'parallel'
-            : 'queued';
-        const run = this.subtaskRuntime.createRun({
-            parentSessionId,
-            subagentId: subAgentId,
-            agentName: agent.name,
-            task,
-            contractType,
-            expectedOutput,
-            subagentMode,
-            provider: provider || null,
-            queue_provider: queueProvider || null,
-            concurrency_mode: concurrencyMode
-        });
-
-        if (this.toolPermissionService && options.permissionsContract) {
-            this.toolPermissionService.setRunScopedGrant(run.run_id, subAgentId, options.permissionsContract);
-        }
-
-        await this._setSubagentActive(subAgentId, true);
-        const identifiers = buildSubagentIdentifiers({
-            ...run,
-            parent_session_id: parentSessionId,
-            subagent_id: subAgentId
-        });
-        this.eventBus?.publish('subagent:queued', {
-            runId: run.run_id,
-            parentSessionId,
-            childSessionId: run.child_session_id,
-            subagentId: subAgentId,
-            agentName: agent.name,
-            subagentMode,
-            identifiers
-        });
-
-        this._startDelegatedRun(run, agent, task, contractType, expectedOutput, queueProvider || null);
-
-        return {
-            accepted: true,
-            success: true,
-            runId: run.run_id,
-            run_id: run.run_id,
-            agentId: subAgentId,
-            agentName: agent.name,
-            childSessionId: run.child_session_id,
-            child_session_id: run.child_session_id,
-            parentSessionId,
-            parent_session_id: parentSessionId,
-            contractType,
-            contract_type: contractType,
-            subagentMode,
-            subagent_mode: subagentMode,
-            provider: provider || null,
-            concurrency_mode: concurrencyMode,
-            status: run.status,
-            identifiers,
-            runDir: run.run_dir,
-            run_dir: run.run_dir,
-            resultPath: run.result_path,
-            result_path: run.result_path,
-            tracePath: run.trace_path,
-            trace_path: run.trace_path,
-            workspaceDir: run.workspace_dir,
-            workspace_dir: run.workspace_dir
-        };
-    }
-
-    async _enableCompanionPlugin(agent) {
-        return enableCompanionPlugin(this, agent);
-    }
-
-    async _disableCompanionPlugin(agent) {
-        return disableCompanionPlugin(this, agent);
-    }
-
-    getAgentFolderPathById(agentId) {
-        return null; // Will be resolved async via getAgent
-    }
-
     async resolveAgentFolder(agentId) {
         const agent = await this.db.getAgent(agentId);
         if (!agent) return null;
@@ -1002,5 +490,14 @@ ${task}`;
         }
     }
 }
+
+function applyMixin(target, sourcePrototype) {
+    const descriptors = Object.getOwnPropertyDescriptors(sourcePrototype);
+    delete descriptors.constructor;
+    Object.defineProperties(target, descriptors);
+}
+
+applyMixin(AgentManager.prototype, AgentSubagentContractMethods.prototype);
+applyMixin(AgentManager.prototype, AgentSubagentRunMethods.prototype);
 
 module.exports = AgentManager;
