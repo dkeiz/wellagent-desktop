@@ -1,9 +1,10 @@
 {
   "versionCode": 2,
   "versionName": "0.2.0-beta.1",
-  "sha256": "3650d76b2dc035f700ed60c5152e5a7fe085c578960819b5edb51475405a89a6",
+  "sha256": "f68f437d3a963efa57775f48308358c0e4853e5872a7ce8db663a283e05d6f2e",
   "fileName": "localagent-companion-0.2.0-beta.1.apk",
-  "size": 92662207,
+  "size": 29579363,
   "variant": "release",
-  "builtAt": "2026-06-22T09:01:59.6863167+03:00"
+  "abi": "arm64-v8a",
+  "builtAt": "2026-06-22T10:08:17.2855429+03:00"
 }
