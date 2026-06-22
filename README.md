@@ -2,7 +2,7 @@
 
 Local-first AI workspace with desktop UI, superagent orchestration, plugins, workflows, and browser or Android companion access.
 
-`0.1.0-beta.1` is beta.
+`0.2.0` is the final public release.
 
 ## Core Features
 
@@ -54,3 +54,4 @@ Useful commands:
 ## License
 
 MIT. See [LICENSE](LICENSE).
+

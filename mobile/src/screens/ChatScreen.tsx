@@ -21,7 +21,7 @@ function companionPalette(theme: string) {
 
 type CompanionPalette = ReturnType<typeof companionPalette>;
 type ThinkingVisibility = 'show' | 'hide' | 'collapse';
-const CURRENT_ANDROID_VERSION_CODE = 2;
+const CURRENT_ANDROID_VERSION_CODE = 3;
 const STICKY_BOTTOM_THRESHOLD = 80;
 
 function ThinkingBlock({ content, defaultOpen, palette }: { content: string; defaultOpen: boolean; palette: CompanionPalette }) {
@@ -611,3 +611,4 @@ const st = StyleSheet.create({
   emptyTitle: { fontSize: typography.sizes.lg, fontWeight: typography.weights.semibold, textAlign: 'center', marginBottom: spacing.xs },
   emptySub: { fontSize: typography.sizes.sm, textAlign: 'center', lineHeight: 20 }
 });
+

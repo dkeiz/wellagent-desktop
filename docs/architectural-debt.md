@@ -1,7 +1,7 @@
 # Architectural Debt
 
 This file tracks work that is too large or cross-cutting for the
-`0.1.0-beta.1` release-prep gate. Items here should be planned separately and
+`0.2.0` final-public release gate. Items here should be planned separately and
 not hidden inside release metadata cleanup.
 
 ## Security Hardening
@@ -116,3 +116,4 @@ Add focused coverage for:
 - large-file budget enforcement for newly added files;
 - plugin lifecycle rollback and generated output cleanup;
 - database migration idempotency.
+

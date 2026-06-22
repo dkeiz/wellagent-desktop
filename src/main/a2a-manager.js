@@ -162,7 +162,7 @@ class A2AManager extends EventEmitter {
       protocolVersion: '0.3.0',
       name: 'LocalAgent',
       description: 'LocalAgent desktop agent exposed through A2A on localhost.',
-      version: '0.1.0-beta.1',
+      version: '0.2.0',
       preferredTransport: 'JSONRPC',
       url: `${baseUrl}/rpc`,
       preferredInputModes: ['text'],
@@ -783,3 +783,4 @@ module.exports = {
   DEFAULT_HOST,
   DEFAULT_PORT
 };
+

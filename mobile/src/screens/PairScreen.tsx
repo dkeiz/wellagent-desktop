@@ -85,7 +85,7 @@ export function PairScreen({ navigation, route, getClient }: Props) {
         deviceName: name,
         deviceId,
         platform: 'android',
-        appVersion: '0.2.0-beta.1'
+        appVersion: '0.2.0'
       });
       if (!r.success) throw new Error(r.error || 'Pairing failed');
 
@@ -265,3 +265,4 @@ const s = StyleSheet.create({
   chip: { backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
   chipText: { color: colors.text, fontSize: typography.sizes.sm }
 });
+

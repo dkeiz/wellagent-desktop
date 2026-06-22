@@ -2,14 +2,14 @@
 
 [![npm version](https://img.shields.io/npm/v/wellbot.svg)](https://www.npmjs.com/package/wellbot)
 
-Small npm CLI for the Wellbot/LocalAgent Desktop beta.
+Small npm CLI for the Wellbot/LocalAgent Desktop public release.
 
 The npm package is intentionally compact. It does not ship the Electron desktop
 application, local runtime state, tests, or development files. Full desktop
 builds are distributed from GitHub Releases. If you want source mode, the CLI
 can expand itself into the full desktop source from GitHub.
 
-Current beta: `0.1.0-beta.1`.
+Current public release: `0.2.0`.
 
 ```bash
 npx wellbot doctor
@@ -30,4 +30,5 @@ https://github.com/dkeiz/wellagent-desktop/releases/latest
 
 Source:
 https://github.com/dkeiz/wellagent-desktop
+
 

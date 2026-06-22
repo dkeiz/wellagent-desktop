@@ -520,7 +520,7 @@ module.exports = {
           deviceName: 'Chrome on Windows',
           deviceId,
           platform: 'desktop-web',
-          appVersion: '0.1.0-beta.1'
+          appVersion: '0.2.0'
         })
       });
       const pairPayload = await pairResponse.json();
@@ -554,3 +554,4 @@ module.exports = {
     }
   }
 };
+

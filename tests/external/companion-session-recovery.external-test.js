@@ -146,7 +146,7 @@ async function run() {
       deviceName: 'Runtime Browser',
       deviceId,
       platform: 'desktop-web',
-      appVersion: '0.1.0-beta.1'
+      appVersion: '0.2.0'
     });
     assert.equal(pairResponse.status, 200, 'Expected companion pair endpoint success');
     assert.equal(pairResponse.data.success, true, 'Expected companion pairing to succeed');
@@ -254,3 +254,4 @@ run().catch((error) => {
   console.error('[external-test:companion-session-recovery] FAIL:', error.message || String(error));
   process.exit(1);
 });
+

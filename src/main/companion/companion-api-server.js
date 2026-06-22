@@ -338,7 +338,7 @@ class CompanionApiServer {
     const uptimeMs = this._startedAt ? Date.now() - this._startedAt : 0;
     const tlsReady = Boolean(this.server?.tlsEnabled);
     sendJson(res, 200, {
-      ok: true, kind: 'companion', version: '0.1.0-beta.1',
+      ok: true, kind: 'companion', version: '0.2.0',
       host: this.host, port: this.port, tlsEnabled: tlsReady, tlsReady,
       connectionSecure: isTls, uptime: Math.floor(uptimeMs / 1000),
       pairedDevices: 0, connectedDevices: this._wsClients.size + this._remoteWsClients.size
@@ -674,5 +674,6 @@ class CompanionApiServer {
 }
 
 module.exports = CompanionApiServer;
+
 
 

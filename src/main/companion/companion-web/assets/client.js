@@ -174,7 +174,7 @@
         deviceName,
         deviceId: nextDeviceId,
         platform: buildPlatformToken(),
-        appVersion: '0.1.0-beta.1'
+        appVersion: '0.2.0'
       });
       if (!payload.success || !payload.sessionToken) {
         throw new Error(payload.error || 'Pairing failed');
@@ -480,3 +480,4 @@
 
   global.LocalAgentCompanionClient = CompanionBrowserClient;
 })(window);
+

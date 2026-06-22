@@ -2,6 +2,15 @@
 
 All notable changes to LocalAgent Desktop will be documented in this file.
 
+## [0.2.0] — 2026-06-22
+
+### Final Public Release
+
+- Promoted the project to version 0.2.0 for the final public release across desktop, companion, and wellbot package metadata.
+- Refreshed the public README and release docs around superagent workflows, plugins, companions, and Docker or headless runtime.
+- Rebuilt the Windows portable package and replaced the tracked Android APK with a compact arm64 release build.
+
+---
 ## [0.1.0-beta.1] — 2026-05-28
 
 ### 🔄 First Public Beta
@@ -125,3 +134,4 @@ First public alpha release for community testing.
 - Rule manager uses innerHTML (XSS surface)
 - Tool chain has no context window truncation
 - Vector store/embeddings exist but are not wired to knowledge search
+

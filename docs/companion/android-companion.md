@@ -99,8 +99,8 @@ The desktop companion exposes a non-disruptive Android app handoff:
 Place the Git-tracked release APK in `releases/android/`:
 
 ```powershell
-releases\android\localagent-companion-0.2.0-beta.1.apk
-releases\android\localagent-companion-0.2.0-beta.1.apk.metadata.json
+releases\android\localagent-companion-0.2.0.apk
+releases\android\localagent-companion-0.2.0.apk.metadata.json
 ```
 
 The mobile browser prompt stays hidden for seven days after the user taps Later.
@@ -133,5 +133,6 @@ The mobile browser prompt stays hidden for seven days after the user taps Later.
 - Microphone button works on HTTPS with Android mic permission granted.
 - Microphone button works in the Android app over HTTP through the native recording bridge.
 - Android mobile browser shows the app prompt without blocking normal browser use.
+
 
 

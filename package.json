@@ -1,6 +1,6 @@
 {
   "name": "localagent-desktop",
-  "version": "0.1.0-beta.1",
+  "version": "0.2.0",
   "private": true,
   "description": "Local-first AI workspace with superagent orchestration, plugins, companions, and Docker runtime",
   "main": "src/main/main.js",
@@ -138,5 +138,6 @@
     ]
   }
 }
+
 
 
